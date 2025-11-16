@@ -15,17 +15,19 @@ function createWindow() {
     },
   });
 
-  const startUrl = process.env.ELECTRON_START_URL || `file://${path.join(__dirname, '/client/dist/index.html')}`;
+  const startUrl =
+    process.env.ELECTRON_START_URL ||
+    `file://${path.join(__dirname, '/client/dist/index.html')}`;
   win.loadURL(startUrl);
 }
 
 app.whenReady().then(() => createWindow());
 
-// 📁 Select images
+// 📸 Select single image
 ipcMain.handle('select-images', async () => {
   const result = await dialog.showOpenDialog({
-    properties: ['openFile', 'multiSelections'],
-    filters: [{ name: 'Images', extensions: ['jpg', 'png', 'jpeg'] }],
+    properties: ['openFile'],
+    filters: [{ name: 'Images', extensions: ['jpg', 'jpeg', 'png'] }],
   });
   if (result.canceled) return null;
   return result.filePaths;
@@ -41,35 +43,49 @@ ipcMain.handle('select-audio', async () => {
   return result.filePaths[0];
 });
 
-// 🎬 Generate slideshow
+// 🎬 Generate video with single image and audio duration
 ipcMain.on('generate-video', async (event, { images, audioPath }) => {
-  const fs = require('fs');
-  const os = require('os');
+  if (!images || !images.length || !audioPath) {
+    event.sender.send('video-error', 'Missing image or audio');
+    return;
+  }
 
-  // Create temp file list for ffmpeg
-  const fileListPath = path.join(os.tmpdir(), 'images.txt');
-  const listContent = images.map((img) => `file '${img.replace(/\\/g, '/')}'\nduration 3`).join('\n');
-  fs.writeFileSync(fileListPath, listContent, 'utf-8');
-
-  // Add last frame hold (prevents cutoff)
-  fs.appendFileSync(fileListPath, `\nfile '${images[images.length - 1].replace(/\\/g, '/')}'\n`);
-
+  const imagePath = images[0];
   const outputPath = path.join(app.getPath('desktop'), 'slideshow.mp4');
 
-  const command = ffmpeg()
-    .input(fileListPath)
-    .inputOptions(['-f concat', '-safe 0'])
-    .input(audioPath)
-    .outputOptions([
-      '-pix_fmt yuv420p',
-      '-c:v libx264',
-      '-shortest'
-    ])
-    .on('end', () => {
-      event.sender.send('video-done', outputPath);
-    })
-    .on('error', (err) => {
-      event.sender.send('video-error', err.message);
-    })
-    .save(outputPath);
+  // Step 1: Get the audio duration
+  ffmpeg.ffprobe(audioPath, (err, metadata) => {
+    if (err) {
+      event.sender.send('video-error', `Error reading audio: ${err.message}`);
+      return;
+    }
+
+    const audioDuration = metadata.format.duration;
+    if (!audioDuration || isNaN(audioDuration)) {
+      event.sender.send('video-error', 'Unable to determine audio duration');
+      return;
+    }
+
+    // Step 2: Create a video from one image and match it to the audio duration
+    ffmpeg()
+      .input(imagePath)
+      .loop(audioDuration) // Show same image for entire duration
+      .input(audioPath)
+      .outputOptions([
+        '-c:v libx264',
+        '-tune stillimage',
+        '-pix_fmt yuv420p',
+        '-r 30', // ✅ set frame rate correctly here
+        `-t ${audioDuration}`,
+        '-shortest'
+      ])
+      .on('start', (cmd) => console.log('FFmpeg command:', cmd))
+      .on('end', () => {
+        event.sender.send('video-done', outputPath);
+      })
+      .on('error', (err) => {
+        event.sender.send('video-error', `FFmpeg error: ${err.message}`);
+      })
+      .save(outputPath);
+  });
 });
