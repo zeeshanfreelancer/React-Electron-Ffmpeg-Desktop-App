@@ -1,8 +1,6 @@
 const { app, BrowserWindow, ipcMain, dialog } = require('electron');
 const path = require('path');
-const ffmpeg = require('fluent-ffmpeg');
-const ffmpegPath = require('ffmpeg-static');
-ffmpeg.setFfmpegPath(ffmpegPath);
+const { generateScrollingVideo } = require('./videoGenerator');
 
 function createWindow() {
   const win = new BrowserWindow({
@@ -21,71 +19,45 @@ function createWindow() {
   win.loadURL(startUrl);
 }
 
-app.whenReady().then(() => createWindow());
-
-// 📸 Select single image
-ipcMain.handle('select-images', async () => {
-  const result = await dialog.showOpenDialog({
-    properties: ['openFile'],
-    filters: [{ name: 'Images', extensions: ['jpg', 'jpeg', 'png'] }],
+function registerIpcHandlers() {
+  // 📜 Select single image for scrolling text video
+  ipcMain.handle('select-single-image', async () => {
+    const result = await dialog.showOpenDialog({
+      properties: ['openFile'],
+      filters: [{ name: 'Images', extensions: ['jpg', 'jpeg', 'png'] }],
+    });
+    if (result.canceled) return null;
+    return result.filePaths[0];
   });
-  if (result.canceled) return null;
-  return result.filePaths;
+
+  // 🎬 Generate scrolling text video
+  ipcMain.on('generate-scrolling-video', async (event, options) => {
+    try {
+      const progressCallback = (progress) => {
+        event.sender.send('scrolling-video-progress', progress);
+      };
+
+      const outputPath = await generateScrollingVideo(options, progressCallback);
+      event.sender.send('scrolling-video-done', outputPath);
+    } catch (error) {
+      event.sender.send('scrolling-video-error', error.message);
+    }
+  });
+}
+
+app.whenReady().then(() => {
+  registerIpcHandlers();
+  createWindow();
+
+  app.on('activate', () => {
+    if (BrowserWindow.getAllWindows().length === 0) {
+      createWindow();
+    }
+  });
 });
 
-// 🎵 Select audio
-ipcMain.handle('select-audio', async () => {
-  const result = await dialog.showOpenDialog({
-    properties: ['openFile'],
-    filters: [{ name: 'Audio', extensions: ['mp3', 'wav'] }],
-  });
-  if (result.canceled) return null;
-  return result.filePaths[0];
-});
-
-// 🎬 Generate video with single image and audio duration
-ipcMain.on('generate-video', async (event, { images, audioPath }) => {
-  if (!images || !images.length || !audioPath) {
-    event.sender.send('video-error', 'Missing image or audio');
-    return;
+app.on('window-all-closed', () => {
+  if (process.platform !== 'darwin') {
+    app.quit();
   }
-
-  const imagePath = images[0];
-  const outputPath = path.join(app.getPath('desktop'), 'slideshow.mp4');
-
-  // Step 1: Get the audio duration
-  ffmpeg.ffprobe(audioPath, (err, metadata) => {
-    if (err) {
-      event.sender.send('video-error', `Error reading audio: ${err.message}`);
-      return;
-    }
-
-    const audioDuration = metadata.format.duration;
-    if (!audioDuration || isNaN(audioDuration)) {
-      event.sender.send('video-error', 'Unable to determine audio duration');
-      return;
-    }
-
-    // Step 2: Create a video from one image and match it to the audio duration
-    ffmpeg()
-      .input(imagePath)
-      .loop(audioDuration) // Show same image for entire duration
-      .input(audioPath)
-      .outputOptions([
-        '-c:v libx264',
-        '-tune stillimage',
-        '-pix_fmt yuv420p',
-        '-r 30', // ✅ set frame rate correctly here
-        `-t ${audioDuration}`,
-        '-shortest'
-      ])
-      .on('start', (cmd) => console.log('FFmpeg command:', cmd))
-      .on('end', () => {
-        event.sender.send('video-done', outputPath);
-      })
-      .on('error', (err) => {
-        event.sender.send('video-error', `FFmpeg error: ${err.message}`);
-      })
-      .save(outputPath);
-  });
 });

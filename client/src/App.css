@@ -3,75 +3,29 @@
 body {
   margin: 0;
   font-family: "Poppins", "Segoe UI", sans-serif;
-  background: linear-gradient(135deg, #1f2937, #111827);
-  color: #f9fafb;
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  height: 100vh;
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: #2c3e50;
+  min-height: 100vh;
+  padding: 20px;
+  box-sizing: border-box;
 }
 
 .app {
-  background-color: #1e1e2f;
-  padding: 2rem 3rem;
+  background-color: #ffffff;
   border-radius: 20px;
-  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5);
-  width: 400px;
-  text-align: center;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.2);
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 40px 30px;
+  overflow: hidden;
 }
 
-.app h1 {
-  font-size: 1.8rem;
-  margin-bottom: 1.5rem;
-  color: #38bdf8;
-}
+@media (max-width: 768px) {
+  body {
+    padding: 12px;
+  }
 
-input[type="file"] {
-  display: block;
-  width: 100%;
-  background: #2d2d44;
-  color: #f3f4f6;
-  border: 1px solid #4b5563;
-  padding: 0.6rem;
-  border-radius: 10px;
-  margin: 0.8rem 0;
-  cursor: pointer;
-  transition: border-color 0.3s ease;
-}
-
-input[type="file"]:hover {
-  border-color: #38bdf8;
-}
-
-button {
-  width: 100%;
-  background: #38bdf8;
-  border: none;
-  padding: 0.8rem 1rem;
-  border-radius: 10px;
-  color: #1e293b;
-  font-size: 1rem;
-  font-weight: 600;
-  cursor: pointer;
-  margin-top: 1rem;
-  transition: background 0.3s ease, transform 0.2s ease;
-}
-
-button:hover {
-  background: #0ea5e9;
-  transform: translateY(-2px);
-}
-
-p {
-  margin-top: 1rem;
-  font-size: 0.95rem;
-  color: #d1d5db;
-}
-
-p::before {
-  content: "ℹ️ ";
-}
-
-p:empty::before {
-  content: "";
+  .app {
+    padding: 20px 15px;
+  }
 }
