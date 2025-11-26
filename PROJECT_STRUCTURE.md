@@ -45,7 +45,8 @@ slideshow-generator/
 **Key Dependencies:**
 - `electron` - Desktop application framework
 - `skia-canvas` - GPU-accelerated Canvas API for frame generation
-- `fluent-ffmpeg` - FFmpeg wrapper for video encoding
+- `gtts` - Google Text-to-Speech helper used for narration audio
+- `fluent-ffmpeg` - FFmpeg wrapper for video encoding & audio mixing
 - `ffmpeg-static` - Bundled FFmpeg binary
 - `concurrently` - Run multiple commands simultaneously
 - `wait-on` - Wait for services to start
@@ -103,7 +104,7 @@ window.electronAPI = {
 - No direct file system access from renderer
 
 #### `main/videoGenerator.js` ⭐ NEW
-**Purpose:** Core video generation logic using skia-canvas
+**Purpose:** Core video + narration generation logic using skia-canvas, gTTS, and FFmpeg
 
 **Main Function:**
 ```javascript
@@ -129,15 +130,18 @@ async generateScrollingVideo(options, progressCallback)
    - Save frame as PNG
    - Report progress
 
-4. **Video Encoding**
-   - Use fluent-ffmpeg
-   - Combine frames at specified FPS
-   - Encode with H.264 codec
-   - Save to Desktop
+4. **Narration Audio (Optional)**
+   - Use `gtts` to synthesize narration text
+   - Store MP3 alongside generated frames
+   - Report dedicated progress updates
 
-5. **Cleanup**
-   - Delete temp frames
-   - Remove temp directory
+5. **Video Encoding & Mixing**
+   - Use fluent-ffmpeg to encode the silent video stream
+   - When narration exists, mix audio with the encoded video via FFmpeg filters
+   - Save the final MP4 (with or without audio) to the Desktop
+
+6. **Cleanup**
+   - Delete frames, narration assets, and temp directories
 
 **Key Algorithms:**
 
@@ -196,7 +200,7 @@ for (frameNum = 0; frameNum < totalFrames; frameNum++) {
 - Responsive layout adjustments for mobile
 
 #### `client/src/ScrollingTextVideo.jsx` ⭐ NEW
-**Purpose:** Complete UI for scrolling text video generation
+**Purpose:** Complete UI for scrolling text video generation with optional narration audio
 
 **Component Structure:**
 ```jsx

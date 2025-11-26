@@ -18,9 +18,14 @@ A powerful feature that generates professional scrolling text videos from a sing
 - Semi-transparent overlay for better readability
 - Background image scaling to fit video dimensions
 
+🎧 **Optional Narration**
+- Convert narration text to speech with Google TTS
+- Choose from multiple voice languages
+- Auto-mix audio into the exported MP4
+
 📊 **Real-time Progress**
 - Frame generation progress bar
-- Video encoding status
+- Video encoding & audio mixing status
 - Detailed progress messages
 
 ## How It Works
@@ -34,15 +39,19 @@ The system uses `skia-canvas` to generate individual video frames:
 - Scrolls text from bottom to top
 - Saves each frame as PNG
 
-### 2. Video Encoding
-Once all frames are generated, `fluent-ffmpeg` stitches them together:
-- Combines frames at specified FPS
-- Encodes with H.264 codec (libx264)
-- Outputs as MP4 with yuv420p pixel format
-- Optimizes for quality and file size
+### 2. Narration Audio (Optional)
+- `gtts` (Google Text-to-Speech) converts narration text to an MP3 file
+- Progress events keep the UI informed while audio downloads/renders
+- Audio files are stored in the same temp directory as frames
 
-### 3. Cleanup
-- Automatically removes temporary frame files
+### 3. Video Encoding & Mixing
+Once all frames are generated, `fluent-ffmpeg` stitches and (optionally) mixes audio:
+- Combines frames at specified FPS with H.264 encoding
+- When narration exists, FFmpeg pads and mixes the MP3 track into the video
+- Outputs MP4 with `yuv420p` pixel format for wide compatibility
+
+### 4. Cleanup
+- Automatically removes temporary frame and audio files
 - Cleans up temp directory after completion
 
 ## Usage Guide
@@ -67,7 +76,12 @@ Once all frames are generated, `fluent-ffmpeg` stitches them together:
    - **Font Size**: Adjust text size (default: 48px)
    - **Font Family**: Select from 10 common fonts
 
-4. **Generate Video**
+4. **Optional Narration**
+   - Add narration text in the dedicated field
+   - Select a voice language (default: English)
+   - Leave blank to keep the video silent
+
+5. **Generate Video**
    - Click "🎥 Generate Video"
    - Watch real-time progress
    - Video saves to Desktop automatically
@@ -145,7 +159,8 @@ client/src/
 
 ### Backend (Node.js)
 - `skia-canvas` (^3.0.8): GPU-accelerated Canvas rendering engine
-- `fluent-ffmpeg` (^2.1.3): FFmpeg wrapper for video encoding
+- `gtts` (^0.2.1): Text-to-speech synthesis for narration audio
+- `fluent-ffmpeg` (^2.1.3): FFmpeg wrapper for video encoding & mixing
 - `ffmpeg-static` (^5.2.0): FFmpeg binary
 
 ### Frontend (React)
@@ -174,14 +189,17 @@ client/src/
     textColor: string,
     fontSize: number,
     fontFamily: string,
-    fps: number
+    fps: number,
+    narration?: {
+      enabled: boolean,
+      text?: string,
+      language?: string   // e.g., 'en', 'es', 'fr'
+    }
   }
   ```
 - **Description**: Initiates video generation
 
-#### Events
-
-- `scrolling-video-progress`: Progress updates during generation
+- `scrolling-video-progress`: Progress updates (`frame`, `encoding`, `audio`, `audio-mix`)
 - `scrolling-video-done`: Video generation completed
 - `scrolling-video-error`: Error occurred during generation
 
@@ -213,28 +231,32 @@ Depends on:
 
 ### Common Issues
 
-**1. Canvas installation fails**
-- Ensure build tools are installed:
-  - Windows: `npm install --global windows-build-tools`
-  - Mac: Xcode Command Line Tools
-  - Linux: `libcairo2-dev`, `libjpeg-dev`, `libpango1.0-dev`
+**1. Skia Canvas or TTS install fails**
+- Ensure you have a stable internet connection (both packages download prebuilt binaries/audio)
+- Retry with `npm cache clean --force && npm install`
+- If you're behind a proxy, configure npm's `https-proxy` setting
 
 **2. FFmpeg errors**
 - FFmpeg is bundled with `ffmpeg-static`
 - Check console for detailed error messages
 - Ensure write permissions to Desktop
 
-**3. Video won't play**
+**3. Narration audio missing**
+- Confirm narration text is provided before rendering
+- Check console for `gtts` errors (e.g., blocked network)
+- Ensure speakers/volume are enabled during playback
+
+**4. Video won't play**
 - Some players require yuv420p pixel format (included)
 - Try VLC Media Player if default player fails
 - Check video codec support in your player
 
-**4. Progress bar stuck**
+**5. Progress bar stuck**
 - Large videos take time
 - Check console for errors
 - Verify sufficient disk space
 
-**5. Text appears cut off**
+**6. Text appears cut off**
 - Increase video width
 - Reduce font size
 - Check text content for long words

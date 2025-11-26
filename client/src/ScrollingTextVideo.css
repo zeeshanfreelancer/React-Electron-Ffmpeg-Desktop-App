@@ -60,6 +60,47 @@
   line-height: 1.5;
 }
 
+.audio-group textarea {
+  margin-bottom: 12px;
+}
+
+.audio-language-row {
+  display: flex;
+  gap: 16px;
+  align-items: flex-end;
+  flex-wrap: wrap;
+}
+
+.audio-language label {
+  display: block;
+  margin-bottom: 6px;
+  font-weight: 600;
+  color: #495057;
+  font-size: 0.9rem;
+}
+
+.audio-language select {
+  width: 220px;
+  padding: 10px 12px;
+  border: 2px solid #dee2e6;
+  border-radius: 6px;
+  font-size: 0.95rem;
+  transition: border-color 0.2s;
+}
+
+.audio-language select:focus {
+  outline: none;
+  border-color: #4a90e2;
+}
+
+.audio-hint {
+  color: #868e96;
+  font-size: 0.85rem;
+  margin: 0;
+  flex: 1;
+  min-width: 200px;
+}
+
 .form-group input:disabled,
 .form-group textarea:disabled,
 .form-group select:disabled {
@@ -268,6 +309,10 @@
 @media (max-width: 768px) {
   .form-row {
     grid-template-columns: 1fr;
+  }
+
+  .audio-language select {
+    width: 100%;
   }
 
   .scrolling-video-container {

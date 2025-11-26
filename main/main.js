@@ -45,6 +45,19 @@ function registerIpcHandlers() {
   });
 }
 
+// Handle uncaught exceptions to prevent crashes
+process.on('uncaughtException', (error) => {
+  console.error('Uncaught Exception:', error);
+  // Log the error but don't crash the app
+  // The error will be sent to the renderer via IPC if it occurs during video generation
+});
+
+// Handle unhandled promise rejections
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+  // Log the error but don't crash the app
+});
+
 app.whenReady().then(() => {
   registerIpcHandlers();
   createWindow();

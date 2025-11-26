@@ -41,13 +41,13 @@ cd "C:\Users\zeesh\Desktop\Development\Personal Projects\slideshow-generator"
 
 ### Step 2: Install Root Dependencies
 
-This installs Electron, Skia Canvas, FFmpeg, and other core dependencies.
+This installs Electron, Skia Canvas, Google Text-to-Speech, FFmpeg, and other core dependencies.
 
 ```bash
 npm install
 ```
 
-**Note:** Installing `skia-canvas` downloads a prebuilt binary per platform. It usually finishes within a few seconds.
+**Note:** Installing `skia-canvas` downloads a prebuilt binary per platform. It usually finishes within a few seconds. `gtts` relies on Google Translate's TTS API, so you need an active internet connection the first time you install or whenever you generate narration audio.
 
 ### Step 3: Install Client Dependencies
 
@@ -64,6 +64,9 @@ Check that key packages are installed:
 ```bash
 # Check for skia-canvas
 npm list skia-canvas
+
+# Check for text-to-speech support
+npm list gtts
 
 # Check for ffmpeg
 npm list fluent-ffmpeg ffmpeg-static
@@ -125,6 +128,21 @@ npm install skia-canvas --verbose
 ```
 
 Still stuck? Check that your proxy/firewall allows downloads from `https://github.com/samizdatco/skia-canvas/releases` and open an issue on the project if the binary for your platform is missing.
+
+### Issue: Narration Audio Download Fails
+
+`gtts` reaches out to Google Translate's TTS service. If audio generation fails:
+
+```bash
+# Ensure you're online and retry
+npm uninstall gtts
+npm install gtts --verbose
+
+# Optional: clear npm cache between retries
+npm cache clean --force
+```
+
+If you are behind a corporate proxy, configure `HTTPS_PROXY`/`https-proxy` npm settings so the TTS download can complete.
 
 ### Issue: Electron Won't Start
 
