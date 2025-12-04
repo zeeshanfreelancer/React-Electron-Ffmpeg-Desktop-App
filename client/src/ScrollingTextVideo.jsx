@@ -69,17 +69,8 @@ function ScrollingTextVideo() {
   const [progress, setProgress] = useState(0);
   const [progressMessage, setProgressMessage] = useState('');
   const [status, setStatus] = useState('');
-  const [expandedSections, setExpandedSections] = useState({
-    basic: true,
-    textEffects: false,
-    background: false,
-    audio: false,
-    multiSlide: false,
-    quality: false,
-    export: false,
-    subtitles: false,
-    social: false,
-  });
+  const [activeMainTab, setActiveMainTab] = useState('advanced');
+  const [activeSettingsTab, setActiveSettingsTab] = useState('basic');
 
   useEffect(() => {
     window.electronAPI.onScrollingVideoProgress((progressData) => {
@@ -128,14 +119,18 @@ function ScrollingTextVideo() {
       setStatus(`❌ Error: ${error}`);
     });
 
+    window.electronAPI.onScrollingVideoCancelled(() => {
+      setIsGenerating(false);
+      setProgress(0);
+      setProgressMessage('');
+      setStatus('⚠️ Video generation cancelled');
+    });
+
     return () => {
       window.electronAPI.removeScrollingVideoListeners();
     };
   }, []);
 
-  const toggleSection = (section) => {
-    setExpandedSections(prev => ({ ...prev, [section]: !prev[section] }));
-  };
 
   const handleSelectImage = async () => {
     const path = await window.electronAPI.selectSingleImage();
@@ -353,6 +348,14 @@ function ScrollingTextVideo() {
     window.electronAPI.generateScrollingVideo(options);
   };
 
+  const handleCancel = () => {
+    window.electronAPI.cancelScrollingVideo();
+    setIsGenerating(false);
+    setProgress(0);
+    setProgressMessage('');
+    setStatus('⚠️ Video generation cancelled');
+  };
+
   const fontFamilies = [
     'Arial', 'Helvetica', 'Times New Roman', 'Georgia', 'Courier New',
     'Verdana', 'Trebuchet MS', 'Comic Sans MS', 'Impact', 'Palatino',
@@ -428,45 +431,86 @@ function ScrollingTextVideo() {
 
   return (
     <div className="scrolling-video-container">
-      <div className="header-section">
-        <h1>📜 Advanced Video Generator</h1>
-        <div className="header-buttons">
-          <button onClick={handleSaveProject} disabled={isGenerating} className="header-btn">
-            💾 Save Project
-          </button>
-          <button onClick={handleLoadProject} disabled={isGenerating} className="header-btn">
-            📂 Load Project
-          </button>
-        </div>
+      {/* Top-level Tab Navigation */}
+      <div className="main-tab-navigation">
+        <button
+          className={`main-tab-button ${activeMainTab === 'advanced' ? 'active' : ''}`}
+          onClick={() => setActiveMainTab('advanced')}
+          disabled={isGenerating}
+        >
+          📜 Advanced Video Generator
+        </button>
+        <button
+          className={`main-tab-button ${activeMainTab === 'video' ? 'active' : ''}`}
+          onClick={() => setActiveMainTab('video')}
+          disabled={isGenerating}
+        >
+          🎬 Video Generator
+        </button>
+        <button
+          className={`main-tab-button ${activeMainTab === 'uploader' ? 'active' : ''}`}
+          onClick={() => setActiveMainTab('uploader')}
+          disabled={isGenerating}
+        >
+          📤 Video Uploader
+        </button>
       </div>
 
+      {/* Advanced Video Generator Tab */}
+      {activeMainTab === 'advanced' && (
+        <>
       <div className="form-section">
-        {/* Basic Settings */}
-        <div className="section-header" onClick={() => toggleSection('basic')}>
-          <h2>⚙️ Basic Settings {expandedSections.basic ? '▼' : '▶'}</h2>
+        {/* Tab Navigation */}
+        <div className="tab-navigation">
+          <button
+            className={`tab-button ${activeSettingsTab === 'basic' ? 'active' : ''}`}
+            onClick={() => setActiveSettingsTab('basic')}
+            disabled={isGenerating}
+          >
+            ⚙️ Basic Settings
+          </button>
+          <button
+            className={`tab-button ${activeSettingsTab === 'textEffects' ? 'active' : ''}`}
+            onClick={() => setActiveSettingsTab('textEffects')}
+            disabled={isGenerating}
+          >
+            ✨ Text Effects
+          </button>
+          <button
+            className={`tab-button ${activeSettingsTab === 'background' ? 'active' : ''}`}
+            onClick={() => setActiveSettingsTab('background')}
+            disabled={isGenerating}
+          >
+            🖼️ Background Settings
+          </button>
+          <button
+            className={`tab-button ${activeSettingsTab === 'audio' ? 'active' : ''}`}
+            onClick={() => setActiveSettingsTab('audio')}
+            disabled={isGenerating}
+          >
+            🎵 Audio Settings
+          </button>
+          <button
+            className={`tab-button ${activeSettingsTab === 'quality' ? 'active' : ''}`}
+            onClick={() => setActiveSettingsTab('quality')}
+            disabled={isGenerating}
+          >
+            🎬 Video Quality & Export
+          </button>
         </div>
-        {expandedSections.basic && (
-          <div className="section-content">
-            {/* Social Media Presets */}
-            <div className="form-group">
-              <label>Social Media Preset</label>
-              <select
-                value={socialPreset}
-                onChange={(e) => handleSocialPreset(e.target.value)}
-                disabled={isGenerating}
-              >
-                {socialPresets.map((preset) => (
-                  <option key={preset.value} value={preset.value}>
-                    {preset.label}
-                  </option>
-                ))}
-              </select>
-            </div>
 
-            {/* Background Selection */}
+        {/* Basic Settings */}
+        {activeSettingsTab === 'basic' && (
+          <div className="section-content">
+            {/* Action Buttons Row */}
             <div className="form-group">
-              <label>Background</label>
-              <div className="button-group">
+              <div className="button-group-full">
+                <button onClick={handleSaveProject} disabled={isGenerating} className="small-btn">
+                  💾 Save Project
+                </button>
+                <button onClick={handleLoadProject} disabled={isGenerating} className="small-btn">
+                  📂 Load Project
+                </button>
                 <button onClick={handleSelectImage} disabled={isGenerating} className="small-btn">
                   📸 Single Image
                 </button>
@@ -488,6 +532,22 @@ function ScrollingTextVideo() {
               )}
             </div>
 
+            {/* Social Media Presets */}
+            <div className="form-group">
+              <label>Social Media Preset</label>
+              <select
+                value={socialPreset}
+                onChange={(e) => handleSocialPreset(e.target.value)}
+                disabled={isGenerating}
+              >
+                {socialPresets.map((preset) => (
+                  <option key={preset.value} value={preset.value}>
+                    {preset.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
             {/* Text Input */}
             <div className="form-group">
               <label>Scrolling Text</label>
@@ -500,8 +560,8 @@ function ScrollingTextVideo() {
               />
             </div>
 
-            {/* Video Dimensions */}
-            <div className="form-row">
+            {/* Video Settings - All in One Row */}
+            <div className="form-row-five">
               <div className="form-group">
                 <label>Width (px)</label>
                 <input
@@ -522,10 +582,6 @@ function ScrollingTextVideo() {
                   disabled={isGenerating}
                 />
               </div>
-            </div>
-
-            {/* Scroll Settings */}
-            <div className="form-row">
               <div className="form-group">
                 <label>Scroll Speed (px/s)</label>
                 <input
@@ -551,30 +607,25 @@ function ScrollingTextVideo() {
                   ))}
                 </select>
               </div>
-            </div>
-
-            {/* FPS */}
-            <div className="form-group">
-              <label>FPS</label>
-              <input
-                type="number"
-                value={fps}
-                onChange={(e) => setFps(e.target.value)}
-                min="1"
-                max="60"
-                disabled={isGenerating}
-              />
+              <div className="form-group">
+                <label>FPS</label>
+                <input
+                  type="number"
+                  value={fps}
+                  onChange={(e) => setFps(e.target.value)}
+                  min="1"
+                  max="60"
+                  disabled={isGenerating}
+                />
+              </div>
             </div>
           </div>
         )}
 
         {/* Text Effects */}
-        <div className="section-header" onClick={() => toggleSection('textEffects')}>
-          <h2>✨ Text Effects {expandedSections.textEffects ? '▼' : '▶'}</h2>
-        </div>
-        {expandedSections.textEffects && (
+        {activeSettingsTab === 'textEffects' && (
           <div className="section-content">
-            <div className="form-row">
+            <div className="form-row-four">
               <div className="form-group">
                 <label>Text Color</label>
                 <div className="color-input-wrapper">
@@ -603,24 +654,38 @@ function ScrollingTextVideo() {
                   disabled={isGenerating}
                 />
               </div>
+              <div className="form-group">
+                <label>Font Family</label>
+                <select
+                  value={fontFamily}
+                  onChange={(e) => setFontFamily(e.target.value)}
+                  disabled={isGenerating}
+                >
+                  {fontFamilies.map((font) => (
+                    <option key={font} value={font}>
+                      {font}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="form-group">
+                <label>Text Animation</label>
+                <select
+                  value={textAnimation.type}
+                  onChange={(e) => setTextAnimation({ type: e.target.value })}
+                  disabled={isGenerating}
+                >
+                  {animationTypes.map((anim) => (
+                    <option key={anim.value} value={anim.value}>
+                      {anim.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
             </div>
 
-            <div className="form-group">
-              <label>Font Family</label>
-              <select
-                value={fontFamily}
-                onChange={(e) => setFontFamily(e.target.value)}
-                disabled={isGenerating}
-              >
-                {fontFamilies.map((font) => (
-                  <option key={font} value={font}>
-                    {font}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="form-row">
+            {/* Checkboxes in One Row */}
+            <div className="form-row-five">
               <label className="checkbox-label">
                 <input
                   type="checkbox"
@@ -648,9 +713,6 @@ function ScrollingTextVideo() {
                 />
                 Underline
               </label>
-            </div>
-
-            <div className="form-group">
               <label className="checkbox-label">
                 <input
                   type="checkbox"
@@ -663,39 +725,6 @@ function ScrollingTextVideo() {
                 />
                 Text Outline
               </label>
-              {textEffects.outline.enabled && (
-                <div className="form-row">
-                  <div className="form-group">
-                    <label>Outline Color</label>
-                    <input
-                      type="color"
-                      value={textEffects.outline.color}
-                      onChange={(e) => setTextEffects(prev => ({
-                        ...prev,
-                        outline: { ...prev.outline, color: e.target.value }
-                      }))}
-                      disabled={isGenerating}
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label>Outline Width</label>
-                    <input
-                      type="number"
-                      value={textEffects.outline.width}
-                      onChange={(e) => setTextEffects(prev => ({
-                        ...prev,
-                        outline: { ...prev.outline, width: parseInt(e.target.value) }
-                      }))}
-                      min="1"
-                      max="10"
-                      disabled={isGenerating}
-                    />
-                  </div>
-                </div>
-              )}
-            </div>
-
-            <div className="form-group">
               <label className="checkbox-label">
                 <input
                   type="checkbox"
@@ -708,176 +737,191 @@ function ScrollingTextVideo() {
                 />
                 Drop Shadow
               </label>
-              {textEffects.shadow.enabled && (
-                <div className="form-row">
-                  <div className="form-group">
-                    <label>Shadow Color</label>
-                    <input
-                      type="color"
-                      value={textEffects.shadow.color}
-                      onChange={(e) => setTextEffects(prev => ({
-                        ...prev,
-                        shadow: { ...prev.shadow, color: e.target.value }
-                      }))}
-                      disabled={isGenerating}
-                    />
-                  </div>
-                  <div className="form-group">
-                    <label>Blur</label>
-                    <input
-                      type="number"
-                      value={textEffects.shadow.blur}
-                      onChange={(e) => setTextEffects(prev => ({
-                        ...prev,
-                        shadow: { ...prev.shadow, blur: parseInt(e.target.value) }
-                      }))}
-                      min="0"
-                      max="50"
-                      disabled={isGenerating}
-                    />
-                  </div>
-                </div>
-              )}
             </div>
 
-            <div className="form-group">
-              <label>Text Animation</label>
-              <select
-                value={textAnimation.type}
-                onChange={(e) => setTextAnimation({ type: e.target.value })}
-                disabled={isGenerating}
-              >
-                {animationTypes.map((anim) => (
-                  <option key={anim.value} value={anim.value}>
-                    {anim.label}
-                  </option>
-                ))}
-              </select>
-            </div>
+            {/* Text Outline Settings */}
+            {textEffects.outline.enabled && (
+              <div className="form-row">
+                <div className="form-group">
+                  <label>Outline Color</label>
+                  <input
+                    type="color"
+                    value={textEffects.outline.color}
+                    onChange={(e) => setTextEffects(prev => ({
+                      ...prev,
+                      outline: { ...prev.outline, color: e.target.value }
+                    }))}
+                    disabled={isGenerating}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Outline Width</label>
+                  <input
+                    type="number"
+                    value={textEffects.outline.width}
+                    onChange={(e) => setTextEffects(prev => ({
+                      ...prev,
+                      outline: { ...prev.outline, width: parseInt(e.target.value) }
+                    }))}
+                    min="1"
+                    max="10"
+                    disabled={isGenerating}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Drop Shadow Settings */}
+            {textEffects.shadow.enabled && (
+              <div className="form-row">
+                <div className="form-group">
+                  <label>Shadow Color</label>
+                  <input
+                    type="color"
+                    value={textEffects.shadow.color}
+                    onChange={(e) => setTextEffects(prev => ({
+                      ...prev,
+                      shadow: { ...prev.shadow, color: e.target.value }
+                    }))}
+                    disabled={isGenerating}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Blur</label>
+                  <input
+                    type="number"
+                    value={textEffects.shadow.blur}
+                    onChange={(e) => setTextEffects(prev => ({
+                      ...prev,
+                      shadow: { ...prev.shadow, blur: parseInt(e.target.value) }
+                    }))}
+                    min="0"
+                    max="50"
+                    disabled={isGenerating}
+                  />
+                </div>
+              </div>
+            )}
+
           </div>
         )}
 
         {/* Background Settings */}
-        <div className="section-header" onClick={() => toggleSection('background')}>
-          <h2>🖼️ Background Settings {expandedSections.background ? '▼' : '▶'}</h2>
-        </div>
-        {expandedSections.background && (
+        {activeSettingsTab === 'background' && (
           <div className="section-content">
-            <div className="form-group">
-              <label>Image Filter</label>
-              <select
-                value={imageFilter}
-                onChange={(e) => setImageFilter(e.target.value)}
-                disabled={isGenerating}
-              >
-                {imageFilters.map((filter) => (
-                  <option key={filter.value} value={filter.value}>
-                    {filter.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-
-            <div className="form-group">
-              <label>Overlay Opacity</label>
-              <input
-                type="range"
-                min="0"
-                max="1"
-                step="0.1"
-                value={overlayOpacity}
-                onChange={(e) => setOverlayOpacity(parseFloat(e.target.value))}
-                disabled={isGenerating}
-              />
-              <span>{Math.round(overlayOpacity * 100)}%</span>
-            </div>
-
-            <div className="form-group">
-              <label>Color Adjustments</label>
-              <div className="form-row">
-                <div className="form-group">
-                  <label>Brightness</label>
-                  <input
-                    type="range"
-                    min="0"
-                    max="2"
-                    step="0.1"
-                    value={colorAdjustments.brightness}
-                    onChange={(e) => setColorAdjustments(prev => ({
-                      ...prev,
-                      brightness: parseFloat(e.target.value)
-                    }))}
-                    disabled={isGenerating}
-                  />
-                </div>
-                <div className="form-group">
-                  <label>Contrast</label>
-                  <input
-                    type="range"
-                    min="0"
-                    max="2"
-                    step="0.1"
-                    value={colorAdjustments.contrast}
-                    onChange={(e) => setColorAdjustments(prev => ({
-                      ...prev,
-                      contrast: parseFloat(e.target.value)
-                    }))}
-                    disabled={isGenerating}
-                  />
-                </div>
+            {/* Image Filter, Rotation, and Gradient in One Row */}
+            <div className="form-row-three">
+              <div className="form-group">
+                <label>Image Filter</label>
+                <select
+                  value={imageFilter}
+                  onChange={(e) => setImageFilter(e.target.value)}
+                  disabled={isGenerating}
+                >
+                  {imageFilters.map((filter) => (
+                    <option key={filter.value} value={filter.value}>
+                      {filter.label}
+                    </option>
+                  ))}
+                </select>
               </div>
-              <div className="form-row">
-                <div className="form-group">
-                  <label>Saturation</label>
-                  <input
-                    type="range"
-                    min="0"
-                    max="2"
-                    step="0.1"
-                    value={colorAdjustments.saturation}
-                    onChange={(e) => setColorAdjustments(prev => ({
-                      ...prev,
-                      saturation: parseFloat(e.target.value)
-                    }))}
-                    disabled={isGenerating}
-                  />
-                </div>
-                <div className="form-group">
-                  <label>Rotation (degrees)</label>
-                  <input
-                    type="number"
-                    value={backgroundRotation}
-                    onChange={(e) => setBackgroundRotation(parseInt(e.target.value))}
-                    min="-360"
-                    max="360"
-                    disabled={isGenerating}
-                  />
-                </div>
-              </div>
-            </div>
-
-            <div className="form-group">
-              <label className="checkbox-label">
+              <div className="form-group">
+                <label>Rotation (degrees)</label>
                 <input
-                  type="checkbox"
-                  checked={backgroundGradient.enabled}
-                  onChange={(e) => setBackgroundGradient(prev => ({
+                  type="number"
+                  value={backgroundRotation}
+                  onChange={(e) => setBackgroundRotation(parseInt(e.target.value))}
+                  min="-360"
+                  max="360"
+                  disabled={isGenerating}
+                />
+              </div>
+              <div className="form-group">
+                <label>Use Gradient Background</label>
+                <label className="checkbox-label" style={{ marginTop: '8px' }}>
+                  <input
+                    type="checkbox"
+                    checked={backgroundGradient.enabled}
+                    onChange={(e) => setBackgroundGradient(prev => ({
+                      ...prev,
+                      enabled: e.target.checked
+                    }))}
+                    disabled={isGenerating}
+                  />
+                </label>
+              </div>
+            </div>
+
+            {/* Overlay Opacity and Brightness in One Row */}
+            <div className="form-row">
+              <div className="form-group">
+                <label>Overlay Opacity</label>
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.1"
+                  value={overlayOpacity}
+                  onChange={(e) => setOverlayOpacity(parseFloat(e.target.value))}
+                  disabled={isGenerating}
+                />
+                <span>{Math.round(overlayOpacity * 100)}%</span>
+              </div>
+              <div className="form-group">
+                <label>Brightness</label>
+                <input
+                  type="range"
+                  min="0"
+                  max="2"
+                  step="0.1"
+                  value={colorAdjustments.brightness}
+                  onChange={(e) => setColorAdjustments(prev => ({
                     ...prev,
-                    enabled: e.target.checked
+                    brightness: parseFloat(e.target.value)
                   }))}
                   disabled={isGenerating}
                 />
-                Use Gradient Background
-              </label>
+              </div>
+            </div>
+
+            {/* Contrast and Saturation in Next Row */}
+            <div className="form-row">
+              <div className="form-group">
+                <label>Contrast</label>
+                <input
+                  type="range"
+                  min="0"
+                  max="2"
+                  step="0.1"
+                  value={colorAdjustments.contrast}
+                  onChange={(e) => setColorAdjustments(prev => ({
+                    ...prev,
+                    contrast: parseFloat(e.target.value)
+                  }))}
+                  disabled={isGenerating}
+                />
+              </div>
+              <div className="form-group">
+                <label>Saturation</label>
+                <input
+                  type="range"
+                  min="0"
+                  max="2"
+                  step="0.1"
+                  value={colorAdjustments.saturation}
+                  onChange={(e) => setColorAdjustments(prev => ({
+                    ...prev,
+                    saturation: parseFloat(e.target.value)
+                  }))}
+                  disabled={isGenerating}
+                />
+              </div>
             </div>
           </div>
         )}
 
         {/* Audio Settings */}
-        <div className="section-header" onClick={() => toggleSection('audio')}>
-          <h2>🎵 Audio Settings {expandedSections.audio ? '▼' : '▶'}</h2>
-        </div>
-        {expandedSections.audio && (
+        {activeSettingsTab === 'audio' && (
           <div className="section-content">
             <div className="form-group">
               <label>Narration Audio (TTS)</label>
@@ -888,35 +932,37 @@ function ScrollingTextVideo() {
                 rows={4}
                 disabled={isGenerating}
               />
-              <div className="form-row">
-                <div className="form-group">
-                  <label>Voice Language</label>
-                  <select
-                    value={audioLanguage}
-                    onChange={(e) => setAudioLanguage(e.target.value)}
-                    disabled={isGenerating}
-                  >
-                    {narrationLanguages.map((lang) => (
-                      <option key={lang.value} value={lang.value}>
-                        {lang.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+            </div>
+
+            {/* Voice Language and Background Music in One Row */}
+            <div className="form-row audio-controls-row">
+              <div className="form-group">
+                <label>Voice Language</label>
+                <select
+                  value={audioLanguage}
+                  onChange={(e) => setAudioLanguage(e.target.value)}
+                  disabled={isGenerating}
+                  className="audio-control-select"
+                >
+                  {narrationLanguages.map((lang) => (
+                    <option key={lang.value} value={lang.value}>
+                      {lang.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="form-group">
+                <label>Background Music</label>
+                <button onClick={handleSelectAudio} disabled={isGenerating} className="audio-control-btn">
+                  🎵 Select Audio File
+                </button>
+                {backgroundMusic.path && (
+                  <p className="file-info">Selected: {backgroundMusic.path.split(/[/\\]/).pop()}</p>
+                )}
               </div>
             </div>
 
-            <div className="form-group">
-              <label>Background Music</label>
-              <div className="button-group">
-                <button onClick={handleSelectAudio} disabled={isGenerating} className="small-btn">
-                  🎵 Select Audio File
-                </button>
-              </div>
-              {backgroundMusic.path && (
-                <p className="file-info">Selected: {backgroundMusic.path.split(/[/\\]/).pop()}</p>
-              )}
-              {backgroundMusic.enabled && (
+            {backgroundMusic.enabled && (
                 <div className="form-row">
                   <div className="form-group">
                     <label>Volume (0-1)</label>
@@ -962,16 +1008,12 @@ function ScrollingTextVideo() {
                     />
                   </div>
                 </div>
-              )}
-            </div>
+            )}
           </div>
         )}
 
         {/* Video Quality & Export */}
-        <div className="section-header" onClick={() => toggleSection('quality')}>
-          <h2>🎬 Video Quality & Export {expandedSections.quality ? '▼' : '▶'}</h2>
-        </div>
-        {expandedSections.quality && (
+        {activeSettingsTab === 'quality' && (
           <div className="section-content">
             <div className="form-row">
               <div className="form-group">
@@ -1004,35 +1046,37 @@ function ScrollingTextVideo() {
               </div>
             </div>
 
-            <div className="form-group">
-              <label>Custom Bitrate (kbps, optional)</label>
-              <input
-                type="number"
-                value={bitrate}
-                onChange={(e) => setBitrate(e.target.value)}
-                placeholder="Leave empty for preset quality"
-                disabled={isGenerating}
-              />
-            </div>
-
-            <div className="form-group">
-              <label>Output Directory</label>
-              <div className="input-with-button">
+            {/* Custom Bitrate and Output Directory in One Row */}
+            <div className="form-row">
+              <div className="form-group">
+                <label>Custom Bitrate (kbps, optional)</label>
                 <input
-                  type="text"
-                  value={outputDirectory || 'Desktop (default)'}
-                  placeholder="Desktop (default)"
-                  readOnly
+                  type="number"
+                  value={bitrate}
+                  onChange={(e) => setBitrate(e.target.value)}
+                  placeholder="Leave empty for preset quality"
+                  disabled={isGenerating}
                 />
-                <button onClick={handleSelectOutputDirectory} disabled={isGenerating}>
-                  📁 Choose
-                </button>
+              </div>
+              <div className="form-group">
+                <label>Output Directory</label>
+                <div className="input-with-button">
+                  <input
+                    type="text"
+                    value={outputDirectory || 'Desktop (default)'}
+                    placeholder="Desktop (default)"
+                    readOnly
+                  />
+                  <button onClick={handleSelectOutputDirectory} disabled={isGenerating}>
+                    📁 Choose
+                  </button>
+                </div>
               </div>
             </div>
 
             <div className="form-group">
               <label>Additional Exports</label>
-              <div className="checkbox-group">
+              <div className="form-row-three exports-checkboxes">
                 <label className="checkbox-label">
                   <input
                     type="checkbox"
@@ -1065,36 +1109,6 @@ function ScrollingTextVideo() {
           </div>
         )}
 
-        {/* Subtitles */}
-        <div className="section-header" onClick={() => toggleSection('subtitles')}>
-          <h2>📝 Subtitles {expandedSections.subtitles ? '▼' : '▶'}</h2>
-        </div>
-        {expandedSections.subtitles && (
-          <div className="section-content">
-            <div className="form-group">
-              <label className="checkbox-label">
-                <input
-                  type="checkbox"
-                  checked={subtitles.enabled}
-                  onChange={(e) => setSubtitles(prev => ({ ...prev, enabled: e.target.checked }))}
-                  disabled={isGenerating}
-                />
-                Enable Subtitles
-              </label>
-            </div>
-            {subtitles.enabled && (
-              <div className="form-group">
-                <button onClick={handleSelectSubtitle} disabled={isGenerating} className="small-btn">
-                  📄 Load SRT/VTT File
-                </button>
-                {subtitles.filePath && (
-                  <p className="file-info">Loaded: {subtitles.filePath.split(/[/\\]/).pop()}</p>
-                )}
-              </div>
-            )}
-          </div>
-        )}
-
         {/* Generate Button */}
         <button
           className="generate-button"
@@ -1118,12 +1132,39 @@ function ScrollingTextVideo() {
             {progressMessage && (
               <p className="progress-message">{progressMessage}</p>
             )}
+            <div className="cancel-button-container">
+              <button onClick={handleCancel} className="cancel-button">
+                ❌ Cancel
+              </button>
+            </div>
           </div>
         )}
 
         {/* Status Message */}
         {status && <p className="status-message">{status}</p>}
       </div>
+        </>
+      )}
+
+      {/* Video Generator Tab */}
+      {activeMainTab === 'video' && (
+        <div className="form-section">
+          <div className="section-content">
+            <h2>🎬 Video Generator</h2>
+            <p>Video Generator functionality will be implemented here.</p>
+          </div>
+        </div>
+      )}
+
+      {/* Video Uploader Tab */}
+      {activeMainTab === 'uploader' && (
+        <div className="form-section">
+          <div className="section-content">
+            <h2>📤 Video Uploader</h2>
+            <p>Video Uploader functionality will be implemented here.</p>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

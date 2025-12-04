@@ -1,7 +1,13 @@
-const { app, BrowserWindow, ipcMain, dialog } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu } = require('electron');
 const path = require('path');
 const fs = require('fs').promises;
 const { generateScrollingVideo, saveProject, loadProject, batchProcess } = require('./videoGenerator');
+
+// Cancellation state
+let currentVideoGeneration = {
+  cancelled: false,
+  webContents: null,
+};
 
 // Helper: Parse subtitle file (SRT or VTT)
 function parseSubtitleFile(content, format) {
@@ -115,12 +121,16 @@ function createWindow() {
   const win = new BrowserWindow({
     width: 1200,
     height: 900,
+    autoHideMenuBar: true,
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
       nodeIntegration: false,
       contextIsolation: true,
     },
   });
+
+  // Completely remove the menu bar
+  win.setMenu(null);
 
   const startUrl =
     process.env.ELECTRON_START_URL ||
@@ -261,15 +271,42 @@ function registerIpcHandlers() {
 
   // 🎬 Generate scrolling text video
   ipcMain.on('generate-scrolling-video', async (event, options) => {
+    // Reset cancellation flag
+    currentVideoGeneration.cancelled = false;
+    currentVideoGeneration.webContents = event.sender;
+
     try {
       const progressCallback = (progress) => {
+        if (currentVideoGeneration.cancelled) {
+          throw new Error('Video generation cancelled');
+        }
         event.sender.send('scrolling-video-progress', progress);
       };
 
-      const outputPath = await generateScrollingVideo(options, progressCallback);
-      event.sender.send('scrolling-video-done', outputPath);
+      const shouldCancel = () => currentVideoGeneration.cancelled;
+
+      const outputPath = await generateScrollingVideo(options, progressCallback, shouldCancel);
+      if (!currentVideoGeneration.cancelled) {
+        event.sender.send('scrolling-video-done', outputPath);
+      }
     } catch (error) {
-      event.sender.send('scrolling-video-error', error.message);
+      if (!currentVideoGeneration.cancelled) {
+        event.sender.send('scrolling-video-error', error.message);
+      } else {
+        event.sender.send('scrolling-video-cancelled');
+      }
+    } finally {
+      // Reset state
+      currentVideoGeneration.cancelled = false;
+      currentVideoGeneration.webContents = null;
+    }
+  });
+
+  // 🚫 Cancel scrolling text video generation
+  ipcMain.on('cancel-scrolling-video', () => {
+    currentVideoGeneration.cancelled = true;
+    if (currentVideoGeneration.webContents) {
+      currentVideoGeneration.webContents.send('scrolling-video-cancelled');
     }
   });
 

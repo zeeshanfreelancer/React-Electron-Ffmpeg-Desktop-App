@@ -21,6 +21,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Video generation
   generateScrollingVideo: (options) => ipcRenderer.send('generate-scrolling-video', options),
+  cancelScrollingVideo: () => ipcRenderer.send('cancel-scrolling-video'),
   batchProcessVideos: (configs) => ipcRenderer.send('batch-process-videos', configs),
 
   // Preview
@@ -33,6 +34,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.on('scrolling-video-done', (_, path) => callback(path)),
   onScrollingVideoError: (callback) =>
     ipcRenderer.on('scrolling-video-error', (_, err) => callback(err)),
+  onScrollingVideoCancelled: (callback) =>
+    ipcRenderer.on('scrolling-video-cancelled', () => callback()),
   onBatchProcessDone: (callback) =>
     ipcRenderer.on('batch-process-done', (_, results) => callback(results)),
 
@@ -41,6 +44,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.removeAllListeners('scrolling-video-progress');
     ipcRenderer.removeAllListeners('scrolling-video-done');
     ipcRenderer.removeAllListeners('scrolling-video-error');
+    ipcRenderer.removeAllListeners('scrolling-video-cancelled');
     ipcRenderer.removeAllListeners('batch-process-done');
   },
 });

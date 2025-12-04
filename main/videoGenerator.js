@@ -222,7 +222,7 @@ function applyColorAdjustments(ctx, adjustments) {
 }
 
 // Main function: Generate scrolling video with all features
-async function generateScrollingVideo(options, progressCallback) {
+async function generateScrollingVideo(options, progressCallback, shouldCancel) {
   const {
     imagePath,
     imagePaths = null, // Multi-image support
@@ -304,6 +304,11 @@ async function generateScrollingVideo(options, progressCallback) {
     let frameOffset = 0;
 
     for (let slideIndex = 0; slideIndex < slideConfigs.length; slideIndex++) {
+      // Check for cancellation before processing each slide
+      if (shouldCancel && shouldCancel()) {
+        throw new Error('Video generation cancelled');
+      }
+
       const slide = slideConfigs[slideIndex];
       const slideImagePath = slide.imagePath || (slide.imagePaths && slide.imagePaths[0]);
       const slideTexts = slide.texts || (slide.text ? [{ text: slide.text, ...options }] : []);
@@ -362,23 +367,43 @@ async function generateScrollingVideo(options, progressCallback) {
       const slideDuration = slide.duration || (totalFrames / fps);
       const slideFrames = Math.ceil(slideDuration * fps);
 
-      // Generate frames for this slide
+      // Pre-load and cache all images for multi-image backgrounds
+      const imageCache = new Map();
+      if (slide.imagePaths && slide.imagePaths.length > 1) {
+        for (const imagePath of slide.imagePaths) {
+          if (!imageCache.has(imagePath)) {
+            try {
+              const img = await loadImage(imagePath);
+              imageCache.set(imagePath, img);
+            } catch (e) {
+              console.warn(`Failed to pre-load image ${imagePath}:`, e);
+            }
+          }
+        }
+      }
+
+      // Generate frames for this slide with batching
+      const BATCH_SIZE = 10; // Process frames in batches for parallel writing
+      const frameWritePromises = [];
+
       for (let frameNum = 0; frameNum < slideFrames; frameNum++) {
+        // Check for cancellation
+        if (shouldCancel && shouldCancel()) {
+          throw new Error('Video generation cancelled');
+        }
+
         // Clear canvas
         ctx.clearRect(0, 0, width, height);
 
         // Reset filters
         ctx.filter = 'none';
 
-        // Handle multi-image background rotation
+        // Handle multi-image background rotation (use cached images)
         let currentBgImage = bgImage;
         if (slide.imagePaths && slide.imagePaths.length > 1) {
           const imageIndex = Math.floor((frameNum / slideFrames) * slide.imagePaths.length) % slide.imagePaths.length;
-          try {
-            currentBgImage = await loadImage(slide.imagePaths[imageIndex]);
-          } catch (e) {
-            console.warn(`Failed to load image ${slide.imagePaths[imageIndex]}:`, e);
-          }
+          const imagePath = slide.imagePaths[imageIndex];
+          currentBgImage = imageCache.get(imagePath) || bgImage;
         }
 
         // Draw background
@@ -509,15 +534,36 @@ async function generateScrollingVideo(options, progressCallback) {
           await drawSubtitles(ctx, frameNum, fps, options.subtitles, width, height);
         }
 
-        // Save frame
+        // Save frame (capture buffer immediately, write asynchronously in batches)
         const globalFrameNum = frameOffset + frameNum;
         const frameFileName = `frame${String(globalFrameNum).padStart(6, '0')}.png`;
         const frameFilePath = path.join(tempDir, frameFileName);
+        
+        // Capture buffer immediately (before canvas is cleared for next frame)
         const buffer = canvas.toBufferSync('png');
-        await fs.writeFile(frameFilePath, buffer);
+        
+        // Queue async write (will be batched)
+        const writePromise = fs.writeFile(frameFilePath, buffer);
+        frameWritePromises.push(writePromise);
+
+        // Batch write frames to disk (every BATCH_SIZE frames or at the end)
+        if (frameWritePromises.length >= BATCH_SIZE || frameNum === slideFrames - 1) {
+          await Promise.all(frameWritePromises);
+          frameWritePromises.length = 0; // Clear array
+          
+          // Yield to event loop periodically to keep UI responsive
+          if (frameNum % (BATCH_SIZE * 2) === 0) {
+            await new Promise(resolve => setImmediate(resolve));
+          }
+        }
 
         // Report progress
         if (progressCallback) {
+          // Check for cancellation before reporting progress
+          if (shouldCancel && shouldCancel()) {
+            throw new Error('Video generation cancelled');
+          }
+
           const totalGlobalFrames = slideConfigs.reduce((sum, s) => {
             const sFrames = Math.ceil((s.duration || (totalFrames / fps)) * fps);
             return sum + sFrames;
@@ -540,6 +586,11 @@ async function generateScrollingVideo(options, progressCallback) {
         // Transition frames would be generated here
         // For now, we'll skip transition frames
       }
+    }
+
+    // Check for cancellation before encoding
+    if (shouldCancel && shouldCancel()) {
+      throw new Error('Video generation cancelled');
     }
 
     // Determine output path
@@ -648,10 +699,10 @@ async function encodeVideo(tempDir, outputPath, fps, format, qualityPreset, bitr
       command.outputOptions(['-c:v libx264', '-pix_fmt yuv420p']);
     }
 
-    // Set quality preset
-    const crfMap = { low: 28, medium: 23, high: 18, ultra: 15 };
-    const presetMap = { low: 'veryfast', medium: 'fast', high: 'medium', ultra: 'slow' };
-    const crf = bitrate ? null : (crfMap[qualityPreset] || 18);
+    // Set quality preset (optimized for speed while maintaining quality)
+    const crfMap = { low: 28, medium: 23, high: 20, ultra: 18 }; // Slightly higher CRF for faster encoding
+    const presetMap = { low: 'veryfast', medium: 'fast', high: 'fast', ultra: 'medium' }; // Use 'fast' for high quality
+    const crf = bitrate ? null : (crfMap[qualityPreset] || 20);
     const preset = presetMap[qualityPreset] || 'fast';
 
     if (bitrate) {
@@ -684,6 +735,20 @@ async function encodeVideo(tempDir, outputPath, fps, format, qualityPreset, bitr
   });
 }
 
+// Helper: Get video duration in seconds
+function getVideoDuration(videoPath) {
+  return new Promise((resolve, reject) => {
+    ffmpeg.ffprobe(videoPath, (err, metadata) => {
+      if (err) {
+        reject(err);
+      } else {
+        const duration = metadata.format.duration || 0;
+        resolve(duration);
+      }
+    });
+  });
+}
+
 // Helper: Mix all audio sources
 async function mixAllAudio(
   videoPath,
@@ -702,10 +767,20 @@ async function mixAllAudio(
     });
   }
 
+  // Get video duration for fade out timing
+  let videoDuration = 0;
+  if (bgMusicFadeOut > 0) {
+    try {
+      videoDuration = await getVideoDuration(videoPath);
+    } catch (err) {
+      console.warn('Could not get video duration for fade out:', err.message);
+    }
+  }
+
   return new Promise((resolve, reject) => {
     const command = ffmpeg().input(videoPath);
     let audioFilters = [];
-    let audioMap = '';
+    let audioMapLabel = '';
 
     // Handle narration
     if (narrationPath) {
@@ -718,39 +793,48 @@ async function mixAllAudio(
       const inputIndex = narrationPath ? 2 : 1;
       command.input(bgMusicPath);
       
+      // Build music filter chain
       let musicFilter = `[${inputIndex}:a]`;
+      const filterParts = [];
       
-      // Apply volume
+      // Apply volume if needed
       if (bgMusicVolume !== 1) {
-        musicFilter += `volume=${bgMusicVolume}[m1]`;
-      } else {
-        musicFilter += 'copy[m1]';
+        filterParts.push(`volume=${bgMusicVolume}`);
       }
-
-      // Apply fades
-      if (bgMusicFadeIn > 0 || bgMusicFadeOut > 0) {
-        // Get video duration for fade out timing
-        musicFilter = musicFilter.replace('[m1]', `afade=t=in:st=0:d=${bgMusicFadeIn},afade=t=out:st=0:d=${bgMusicFadeOut}[m2]`);
-      } else {
-        musicFilter = musicFilter.replace('[m1]', 'copy[m2]');
+      
+      // Apply fade in
+      if (bgMusicFadeIn > 0) {
+        filterParts.push(`afade=t=in:st=0:d=${bgMusicFadeIn}`);
       }
-
+      
+      // Apply fade out
+      if (bgMusicFadeOut > 0 && videoDuration > 0) {
+        const fadeOutStart = Math.max(0, videoDuration - bgMusicFadeOut);
+        filterParts.push(`afade=t=out:st=${fadeOutStart}:d=${bgMusicFadeOut}`);
+      }
+      
+      // Combine all filter parts
+      if (filterParts.length > 0) {
+        musicFilter += filterParts.join(',');
+      }
+      
+      musicFilter += '[m2]';
       audioFilters.push(musicFilter);
 
       // Mix narration and music if both exist
       if (narrationPath) {
         audioFilters.push('[a1][m2]amix=inputs=2:duration=first:dropout_transition=2[aout]');
-        audioMap = '[aout]';
+        audioMapLabel = 'aout';
       } else {
-        audioMap = '[m2]';
+        audioMapLabel = 'm2';
       }
     } else if (narrationPath) {
-      audioMap = '[a1]';
+      audioMapLabel = 'a1';
     }
 
     const outputOptions = ['-map', '0:v:0'];
-    if (audioMap) {
-      outputOptions.push('-map', audioMap);
+    if (audioMapLabel) {
+      outputOptions.push('-map', `[${audioMapLabel}]`);
     }
     outputOptions.push('-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-shortest');
 
