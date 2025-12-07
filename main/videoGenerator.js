@@ -1,6 +1,7 @@
 const { Canvas, loadImage } = require('skia-canvas');
 const fs = require('fs').promises;
 const path = require('path');
+const os = require('os');
 const ffmpeg = require('fluent-ffmpeg');
 const ffmpegPath = require('ffmpeg-static');
 const gTTS = require('gtts');
@@ -382,21 +383,20 @@ async function generateScrollingVideo(options, progressCallback, shouldCancel) {
         }
       }
 
-      // Generate frames for this slide with batching
-      const BATCH_SIZE = 10; // Process frames in batches for parallel writing
-      const frameWritePromises = [];
+      // Generate frames for this slide with parallel processing
+      // Determine optimal concurrency based on CPU cores (default to 4, max 8)
+      const cpuCount = os.cpus().length;
+      const CONCURRENCY = Math.min(Math.max(4, Math.floor(cpuCount / 2)), 8);
+      const PARALLEL_BATCH_SIZE = CONCURRENCY; // Process this many frames in parallel
 
-      for (let frameNum = 0; frameNum < slideFrames; frameNum++) {
-        // Check for cancellation
-        if (shouldCancel && shouldCancel()) {
-          throw new Error('Video generation cancelled');
-        }
-
-        // Clear canvas
-        ctx.clearRect(0, 0, width, height);
+      // Helper function to generate a single frame
+      const generateSingleFrame = async (frameNum, globalFrameNum) => {
+        // Create a new canvas instance for this frame (thread-safe)
+        const frameCanvas = new Canvas(width, height);
+        const frameCtx = frameCanvas.getContext('2d');
 
         // Reset filters
-        ctx.filter = 'none';
+        frameCtx.filter = 'none';
 
         // Handle multi-image background rotation (use cached images)
         let currentBgImage = bgImage;
@@ -409,20 +409,20 @@ async function generateScrollingVideo(options, progressCallback, shouldCancel) {
         // Draw background
         if (currentBgImage) {
           // Apply color adjustments
-          applyColorAdjustments(ctx, colorAdjustments);
+          applyColorAdjustments(frameCtx, colorAdjustments);
 
           // Apply image filter
-          applyImageFilters(ctx, width, height, imageFilter);
+          applyImageFilters(frameCtx, width, height, imageFilter);
 
           // Handle background crop/rotation
           const crop = options.backgroundCrop || {};
           const rotation = options.backgroundRotation || 0;
 
           if (rotation !== 0) {
-            ctx.save();
-            ctx.translate(width / 2, height / 2);
-            ctx.rotate((rotation * Math.PI) / 180);
-            ctx.translate(-width / 2, -height / 2);
+            frameCtx.save();
+            frameCtx.translate(width / 2, height / 2);
+            frameCtx.rotate((rotation * Math.PI) / 180);
+            frameCtx.translate(-width / 2, -height / 2);
           }
 
           if (crop.enabled && (crop.x !== undefined || crop.y !== undefined || crop.width || crop.height)) {
@@ -430,7 +430,7 @@ async function generateScrollingVideo(options, progressCallback, shouldCancel) {
             const sy = crop.y || 0;
             const sw = crop.width || currentBgImage.width;
             const sh = crop.height || currentBgImage.height;
-            ctx.drawImage(currentBgImage, sx, sy, sw, sh, 0, 0, width, height);
+            frameCtx.drawImage(currentBgImage, sx, sy, sw, sh, 0, 0, width, height);
           } else {
             // Scale to fit
             const scale = Math.max(width / currentBgImage.width, height / currentBgImage.height);
@@ -438,37 +438,37 @@ async function generateScrollingVideo(options, progressCallback, shouldCancel) {
             const scaledHeight = currentBgImage.height * scale;
             const x = (width - scaledWidth) / 2;
             const y = (height - scaledHeight) / 2;
-            ctx.drawImage(currentBgImage, x, y, scaledWidth, scaledHeight);
+            frameCtx.drawImage(currentBgImage, x, y, scaledWidth, scaledHeight);
           }
 
           if (rotation !== 0) {
-            ctx.restore();
+            frameCtx.restore();
           }
 
-          ctx.filter = 'none';
+          frameCtx.filter = 'none';
         } else if (options.backgroundGradient && options.backgroundGradient.enabled) {
           // Draw gradient background
           const grad = options.backgroundGradient;
           const gradient = createGradient(
-            ctx,
+            frameCtx,
             grad.x1 !== undefined ? grad.x1 : 0,
             grad.y1 !== undefined ? grad.y1 : 0,
             grad.x2 !== undefined ? grad.x2 : width,
             grad.y2 !== undefined ? grad.y2 : height,
             grad.colors && grad.colors.length > 0 ? grad.colors : ['#000000', '#ffffff']
           );
-          ctx.fillStyle = gradient;
-          ctx.fillRect(0, 0, width, height);
+          frameCtx.fillStyle = gradient;
+          frameCtx.fillRect(0, 0, width, height);
         } else {
           // Default black background if no image or gradient
-          ctx.fillStyle = '#000000';
-          ctx.fillRect(0, 0, width, height);
+          frameCtx.fillStyle = '#000000';
+          frameCtx.fillRect(0, 0, width, height);
         }
 
         // Add overlay for text readability
         if (options.overlayOpacity !== undefined && options.overlayOpacity > 0) {
-          ctx.fillStyle = `rgba(0, 0, 0, ${options.overlayOpacity})`;
-          ctx.fillRect(0, 0, width, height);
+          frameCtx.fillStyle = `rgba(0, 0, 0, ${options.overlayOpacity})`;
+          frameCtx.fillRect(0, 0, width, height);
         }
 
         // Draw text blocks
@@ -493,18 +493,18 @@ async function generateScrollingVideo(options, progressCallback, shouldCancel) {
           for (let i = 0; i < textBlock.lines.length; i++) {
             const lineY = anim.y + (i * lineHeight);
             if (lineY > -lineHeight && lineY < height) {
-              ctx.save();
+              frameCtx.save();
 
               // Apply opacity from animation
               if (anim.opacity !== 1) {
-                ctx.globalAlpha = anim.opacity;
+                frameCtx.globalAlpha = anim.opacity;
               }
 
               // Apply scale from animation
               if (anim.scale !== 1) {
-                ctx.translate(scrollPos.x, lineY);
-                ctx.scale(anim.scale, anim.scale);
-                ctx.translate(-scrollPos.x, -lineY);
+                frameCtx.translate(scrollPos.x, lineY);
+                frameCtx.scale(anim.scale, anim.scale);
+                frameCtx.translate(-scrollPos.x, -lineY);
               }
 
               // Draw text with effects
@@ -512,7 +512,7 @@ async function generateScrollingVideo(options, progressCallback, shouldCancel) {
               const fontSizeToUse = blockOptions.fontSize || fontSize;
               const fontFamilyToUse = blockOptions.fontFamily || fontFamily;
 
-              drawTextWithEffects(ctx, textBlock.lines[i], scrollPos.x, lineY, {
+              drawTextWithEffects(frameCtx, textBlock.lines[i], scrollPos.x, lineY, {
                 color: textColorToUse,
                 fontSize: fontSizeToUse,
                 fontFamily: fontFamilyToUse,
@@ -524,58 +524,69 @@ async function generateScrollingVideo(options, progressCallback, shouldCancel) {
                 gradient: blockTextEffects.gradient || null,
               });
 
-              ctx.restore();
+              frameCtx.restore();
             }
           }
         }
 
         // Draw subtitles if enabled
         if (options.subtitles && options.subtitles.enabled) {
-          await drawSubtitles(ctx, frameNum, fps, options.subtitles, width, height);
+          await drawSubtitles(frameCtx, frameNum, fps, options.subtitles, width, height);
         }
 
-        // Save frame (capture buffer immediately, write asynchronously in batches)
-        const globalFrameNum = frameOffset + frameNum;
+        // Capture buffer and save frame
+        const buffer = frameCanvas.toBufferSync('png');
         const frameFileName = `frame${String(globalFrameNum).padStart(6, '0')}.png`;
         const frameFilePath = path.join(tempDir, frameFileName);
         
-        // Capture buffer immediately (before canvas is cleared for next frame)
-        const buffer = canvas.toBufferSync('png');
+        // Write frame to disk
+        await fs.writeFile(frameFilePath, buffer);
         
-        // Queue async write (will be batched)
-        const writePromise = fs.writeFile(frameFilePath, buffer);
-        frameWritePromises.push(writePromise);
+        return { frameNum, globalFrameNum };
+      };
 
-        // Batch write frames to disk (every BATCH_SIZE frames or at the end)
-        if (frameWritePromises.length >= BATCH_SIZE || frameNum === slideFrames - 1) {
-          await Promise.all(frameWritePromises);
-          frameWritePromises.length = 0; // Clear array
-          
-          // Yield to event loop periodically to keep UI responsive
-          if (frameNum % (BATCH_SIZE * 2) === 0) {
-            await new Promise(resolve => setImmediate(resolve));
-          }
+      // Generate frames in parallel batches
+      const totalGlobalFrames = slideConfigs.reduce((sum, s) => {
+        const sFrames = Math.ceil((s.duration || (totalFrames / fps)) * fps);
+        return sum + sFrames;
+      }, 0);
+
+      for (let batchStart = 0; batchStart < slideFrames; batchStart += PARALLEL_BATCH_SIZE) {
+        // Check for cancellation
+        if (shouldCancel && shouldCancel()) {
+          throw new Error('Video generation cancelled');
         }
 
-        // Report progress
+        const batchEnd = Math.min(batchStart + PARALLEL_BATCH_SIZE, slideFrames);
+        const batchPromises = [];
+
+        // Create promises for this batch
+        for (let frameNum = batchStart; frameNum < batchEnd; frameNum++) {
+          const globalFrameNum = frameOffset + frameNum;
+          batchPromises.push(generateSingleFrame(frameNum, globalFrameNum));
+        }
+
+        // Process batch in parallel
+        await Promise.all(batchPromises);
+
+        // Report progress after each batch
         if (progressCallback) {
           // Check for cancellation before reporting progress
           if (shouldCancel && shouldCancel()) {
             throw new Error('Video generation cancelled');
           }
 
-          const totalGlobalFrames = slideConfigs.reduce((sum, s) => {
-            const sFrames = Math.ceil((s.duration || (totalFrames / fps)) * fps);
-            return sum + sFrames;
-          }, 0);
-          const progress = ((globalFrameNum + 1) / totalGlobalFrames) * 100;
+          const progress = ((frameOffset + batchEnd) / totalGlobalFrames) * 100;
           progressCallback({
             type: 'frame',
-            current: globalFrameNum + 1,
+            current: frameOffset + batchEnd,
             total: totalGlobalFrames,
             progress: Math.round(progress),
           });
         }
+
+        // Yield to event loop periodically to keep UI responsive
+        await new Promise(resolve => setImmediate(resolve));
       }
 
       frameOffset += slideFrames;
@@ -705,10 +716,23 @@ async function encodeVideo(tempDir, outputPath, fps, format, qualityPreset, bitr
     const crf = bitrate ? null : (crfMap[qualityPreset] || 20);
     const preset = presetMap[qualityPreset] || 'fast';
 
+    // Use multiple threads for faster encoding (use all available CPU cores)
+    const threadCount = os.cpus().length;
+    
     if (bitrate) {
-      command.outputOptions([`-b:v ${bitrate}k`, `-preset ${preset}`]);
+      command.outputOptions([
+        `-b:v ${bitrate}k`,
+        `-preset ${preset}`,
+        `-threads ${threadCount}`,
+        '-movflags +faststart' // Enable fast start for web playback
+      ]);
     } else {
-      command.outputOptions([`-crf ${crf}`, `-preset ${preset}`]);
+      command.outputOptions([
+        `-crf ${crf}`,
+        `-preset ${preset}`,
+        `-threads ${threadCount}`,
+        '-movflags +faststart' // Enable fast start for web playback
+      ]);
     }
 
     command
