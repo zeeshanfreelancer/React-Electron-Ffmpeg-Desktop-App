@@ -72,6 +72,22 @@ function ScrollingTextVideo() {
   const [activeMainTab, setActiveMainTab] = useState('advanced');
   const [activeSettingsTab, setActiveSettingsTab] = useState('basic');
 
+  // YouTube Upload state
+  const [youtubeVideoPath, setYoutubeVideoPath] = useState('');
+  const [youtubeTitle, setYoutubeTitle] = useState('');
+  const [youtubeDescription, setYoutubeDescription] = useState('');
+  const [youtubeTags, setYoutubeTags] = useState('');
+  const [youtubePrivacy, setYoutubePrivacy] = useState('private');
+  const [youtubeCategory, setYoutubeCategory] = useState('22');
+  const [isYoutubeUploading, setIsYoutubeUploading] = useState(false);
+  const [youtubeUploadProgress, setYoutubeUploadProgress] = useState(0);
+  const [youtubeUploadMessage, setYoutubeUploadMessage] = useState('');
+  const [youtubeAuthenticated, setYoutubeAuthenticated] = useState(false);
+  const [youtubeCredentials, setYoutubeCredentials] = useState({ clientId: '', clientSecret: '', redirectUri: '' });
+  const [showCredentialsForm, setShowCredentialsForm] = useState(false);
+  const [youtubeAuthCode, setYoutubeAuthCode] = useState('');
+  const [showAuthCodeInput, setShowAuthCodeInput] = useState(false);
+
   useEffect(() => {
     window.electronAPI.onScrollingVideoProgress((progressData) => {
       const canUpdateProgress =
@@ -128,8 +144,197 @@ function ScrollingTextVideo() {
 
     return () => {
       window.electronAPI.removeScrollingVideoListeners();
+      window.electronAPI.removeYoutubeListeners();
     };
   }, []);
+
+  // YouTube Upload useEffect
+  useEffect(() => {
+    // Check authentication status on mount
+    checkYoutubeAuth();
+
+    // Set up YouTube event listeners
+    window.electronAPI.onYoutubeAuthUrl((url) => {
+      window.electronAPI.youtubeOpenUrl(url);
+      setShowAuthCodeInput(true);
+      setStatus('🔐 Please authorize the app in your browser. After authorization, copy the code from the URL and paste it below.');
+    });
+
+    window.electronAPI.onYoutubeAuthSuccess(() => {
+      setYoutubeAuthenticated(true);
+      setStatus('✅ Successfully authenticated with YouTube!');
+    });
+
+    window.electronAPI.onYoutubeUploadProgress((progressData) => {
+      setYoutubeUploadProgress(progressData.progress || 0);
+      setYoutubeUploadMessage(progressData.message || 'Uploading...');
+    });
+
+    window.electronAPI.onYoutubeUploadSuccess((result) => {
+      setIsYoutubeUploading(false);
+      setYoutubeUploadProgress(100);
+      setStatus(`✅ Video uploaded successfully! URL: ${result.url}`);
+      setYoutubeUploadMessage('');
+    });
+
+    window.electronAPI.onYoutubeUploadError((error) => {
+      setIsYoutubeUploading(false);
+      setStatus(`❌ Upload failed: ${error}`);
+      setYoutubeUploadMessage('');
+    });
+
+    window.electronAPI.onYoutubeError((error) => {
+      let errorMessage = `❌ YouTube Error: ${error}`;
+      
+      // Provide helpful messages for common errors
+      if (error.includes('403') || error.includes('access_denied')) {
+        errorMessage += '\n\n💡 Troubleshooting:\n';
+        errorMessage += '1. Make sure OAuth consent screen is configured in Google Cloud Console\n';
+        errorMessage += '2. If app is in "Testing" mode, add your email to "Test users"\n';
+        errorMessage += '3. Verify redirect URI is exactly "http://localhost" (no port, no trailing slash)\n';
+        errorMessage += '4. Try clearing saved credentials and re-entering them';
+      } else if (error.includes('401') || error.includes('invalid_client')) {
+        errorMessage += '\n\n💡 Troubleshooting:\n';
+        errorMessage += '1. Verify Client ID and Client Secret are correct\n';
+        errorMessage += '2. Make sure you created "Desktop app" type credentials\n';
+        errorMessage += '3. Check that redirect URI matches exactly in Google Cloud Console';
+      }
+      
+      setStatus(errorMessage);
+    });
+
+    return () => {
+      window.electronAPI.removeYoutubeListeners();
+    };
+  }, []);
+
+  const checkYoutubeAuth = async () => {
+    try {
+      const result = await window.electronAPI.youtubeCheckAuth();
+      setYoutubeAuthenticated(result.authenticated);
+    } catch (error) {
+      setYoutubeAuthenticated(false);
+    }
+  };
+
+  const handleSelectYoutubeVideo = async () => {
+    const path = await window.electronAPI.selectVideo();
+    if (path) {
+      setYoutubeVideoPath(path);
+      // Auto-fill title from filename if title is empty
+      if (!youtubeTitle) {
+        const filename = path.split(/[/\\]/).pop().replace(/\.[^/.]+$/, '');
+        setYoutubeTitle(filename);
+      }
+      setStatus('');
+    }
+  };
+
+  const handleSaveYoutubeCredentials = async () => {
+    if (!youtubeCredentials.clientId || !youtubeCredentials.clientSecret) {
+      setStatus('❌ Please enter both Client ID and Client Secret');
+      return;
+    }
+
+    try {
+      // Normalize redirect URI - remove trailing slashes and ensure it's just http://localhost
+      let redirectUri = (youtubeCredentials.redirectUri || 'http://localhost').trim();
+      // Remove trailing slash
+      redirectUri = redirectUri.replace(/\/$/, '');
+      // Ensure it's just http://localhost (no port)
+      if (redirectUri.includes('localhost') && redirectUri !== 'http://localhost') {
+        redirectUri = 'http://localhost';
+      }
+      
+      const credentials = {
+        installed: {
+          client_id: youtubeCredentials.clientId.trim(),
+          client_secret: youtubeCredentials.clientSecret.trim(),
+          redirect_uris: [redirectUri],
+        },
+      };
+      await window.electronAPI.youtubeSaveCredentials(credentials);
+      setStatus('✅ Credentials saved successfully! Make sure the redirect URI in Google Cloud Console matches exactly: ' + redirectUri);
+      setShowCredentialsForm(false);
+    } catch (error) {
+      setStatus(`❌ Failed to save credentials: ${error.message}`);
+    }
+  };
+
+  const handleYoutubeAuthenticate = () => {
+    setShowAuthCodeInput(false);
+    setYoutubeAuthCode('');
+    window.electronAPI.youtubeAuthenticate();
+  };
+
+  const handleYoutubeAuthCodeSubmit = () => {
+    let code = youtubeAuthCode.trim();
+    
+    // If user pasted the full URL, extract just the code
+    if (code.includes('code=')) {
+      const match = code.match(/code=([^&]+)/);
+      if (match) {
+        code = match[1];
+      }
+    }
+    
+    // Also handle if they pasted the full URL with http://localhost
+    if (code.includes('http://localhost')) {
+      const url = new URL(code);
+      code = url.searchParams.get('code') || code;
+    }
+    
+    if (!code) {
+      setStatus('❌ Please enter the authorization code');
+      return;
+    }
+    
+    window.electronAPI.youtubeSendAuthCode(code);
+    setShowAuthCodeInput(false);
+    setYoutubeAuthCode('');
+  };
+
+  const handleYoutubeLogout = async () => {
+    try {
+      await window.electronAPI.youtubeRevokeToken();
+      setYoutubeAuthenticated(false);
+      setStatus('✅ Logged out successfully');
+    } catch (error) {
+      setStatus(`❌ Failed to logout: ${error.message}`);
+    }
+  };
+
+  const handleYoutubeUpload = () => {
+    if (!youtubeVideoPath) {
+      setStatus('❌ Please select a video file');
+      return;
+    }
+    if (!youtubeTitle.trim()) {
+      setStatus('❌ Please enter a video title');
+      return;
+    }
+    if (!youtubeAuthenticated) {
+      setStatus('❌ Please authenticate with YouTube first');
+      return;
+    }
+
+    setIsYoutubeUploading(true);
+    setYoutubeUploadProgress(0);
+    setYoutubeUploadMessage('Preparing upload...');
+    setStatus('📤 Starting upload...');
+
+    const tags = youtubeTags.split(',').map(tag => tag.trim()).filter(tag => tag.length > 0);
+
+    const metadata = {
+      title: youtubeTitle,
+      description: youtubeDescription,
+      tags: tags,
+      privacyStatus: youtubePrivacy,
+      categoryId: youtubeCategory,
+    };
+
+    window.electronAPI.youtubeUploadVideo(youtubeVideoPath, metadata);
+  };
 
 
   const handleSelectImage = async () => {
@@ -1160,8 +1365,250 @@ function ScrollingTextVideo() {
       {activeMainTab === 'uploader' && (
         <div className="form-section">
           <div className="section-content">
-            <h2>📤 Video Uploader</h2>
-            <p>Video Uploader functionality will be implemented here.</p>
+            <h2>📤 YouTube Video Uploader</h2>
+
+            {/* Authentication Section */}
+            <div className="form-group" style={{ marginBottom: '20px', padding: '15px', backgroundColor: '#f5f5f5', borderRadius: '8px' }}>
+              <h3 style={{ marginTop: 0 }}>🔐 Authentication</h3>
+              {youtubeAuthenticated ? (
+                <div>
+                  <p style={{ color: 'green', marginBottom: '10px' }}>✅ Authenticated with YouTube</p>
+                  <button onClick={handleYoutubeLogout} className="small-btn" style={{ backgroundColor: '#dc3545' }}>
+                    🚪 Logout
+                  </button>
+                </div>
+              ) : (
+                <div>
+                  <p style={{ color: '#666', marginBottom: '10px' }}>Not authenticated</p>
+                  <div style={{ marginBottom: '15px' }}>
+                    <button
+                      onClick={() => setShowCredentialsForm(!showCredentialsForm)}
+                      className="small-btn"
+                      style={{ marginRight: '10px' }}
+                    >
+                      {showCredentialsForm ? '❌ Cancel' : '⚙️ Setup Credentials'}
+                    </button>
+                    {!showCredentialsForm && !showAuthCodeInput && (
+                      <button onClick={handleYoutubeAuthenticate} className="small-btn" style={{ backgroundColor: '#28a745' }}>
+                        🔑 Authenticate
+                      </button>
+                    )}
+                  </div>
+                  {showAuthCodeInput && (
+                    <div style={{ padding: '15px', backgroundColor: 'white', borderRadius: '5px', marginTop: '10px' }}>
+                      <div style={{ fontSize: '12px', color: '#666', marginBottom: '15px', padding: '10px', backgroundColor: '#e7f3ff', borderRadius: '5px' }}>
+                        <strong>📋 Instructions:</strong>
+                        <ol style={{ margin: '10px 0', paddingLeft: '20px' }}>
+                          <li>After authorizing, you'll be redirected to a page that says "This site can't be reached" - this is normal!</li>
+                          <li>Look at the URL in your browser's address bar</li>
+                          <li>Copy the <strong>entire URL</strong> (or just the code part after "code=")</li>
+                          <li>Paste it in the field below - the app will automatically extract the code</li>
+                        </ol>
+                        <p style={{ margin: '5px 0', fontStyle: 'italic' }}>
+                          Example URL: <code style={{ fontSize: '10px', backgroundColor: '#f0f0f0', padding: '2px 4px' }}>http://localhost/?code=4/0ATX87lMXer-07T4IBVLMaM6HWntf9JzYlyhRQDUHy0NYUhyRTV04Ooy-B-mA34leI2Tg7g</code>
+                        </p>
+                      </div>
+                      <div className="form-group">
+                        <label>Authorization Code or Full URL</label>
+                        <div className="input-with-button">
+                          <input
+                            type="text"
+                            value={youtubeAuthCode}
+                            onChange={(e) => setYoutubeAuthCode(e.target.value)}
+                            placeholder="Paste the full URL or just the code here"
+                            style={{ flex: 1, padding: '8px' }}
+                          />
+                          <button onClick={handleYoutubeAuthCodeSubmit} className="small-btn" style={{ backgroundColor: '#28a745' }}>
+                            ✅ Submit
+                          </button>
+                        </div>
+                        <small style={{ color: '#666', fontSize: '11px', display: 'block', marginTop: '5px' }}>
+                          You can paste either the full URL or just the code - both will work!
+                        </small>
+                      </div>
+                      <button
+                        onClick={() => {
+                          setShowAuthCodeInput(false);
+                          setYoutubeAuthCode('');
+                        }}
+                        className="small-btn"
+                        style={{ marginTop: '10px' }}
+                      >
+                        ❌ Cancel
+                      </button>
+                    </div>
+                  )}
+                  {showCredentialsForm && (
+                    <div style={{ padding: '15px', backgroundColor: 'white', borderRadius: '5px', marginTop: '10px' }}>
+                      <div style={{ fontSize: '12px', color: '#666', marginBottom: '15px', padding: '10px', backgroundColor: '#fff3cd', borderRadius: '5px', border: '1px solid #ffc107' }}>
+                        <strong>📋 Setup Instructions:</strong>
+                        <ol style={{ margin: '10px 0', paddingLeft: '20px' }}>
+                          <li>Go to <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noopener noreferrer">Google Cloud Console</a></li>
+                          <li>Create a new project or select an existing one</li>
+                          <li>Enable YouTube Data API v3</li>
+                          <li><strong>Configure OAuth Consent Screen:</strong>
+                            <ul style={{ marginTop: '5px', paddingLeft: '20px' }}>
+                              <li>Go to "OAuth consent screen" in the left menu</li>
+                              <li>Choose "External" (unless you have a Google Workspace)</li>
+                              <li>Fill in App name, User support email, Developer contact</li>
+                              <li>Add your email to "Test users" if app is in Testing mode</li>
+                              <li>Save and continue through all steps</li>
+                            </ul>
+                          </li>
+                          <li>Create OAuth 2.0 Client ID credentials</li>
+                          <li><strong>Important:</strong> Choose "Desktop app" or "Installed application" as the application type</li>
+                          <li>Add <code>http://localhost</code> (exactly, no trailing slash) as an authorized redirect URI</li>
+                          <li>Copy the Client ID and Client Secret below</li>
+                        </ol>
+                        <div style={{ marginTop: '10px', padding: '8px', backgroundColor: '#f8d7da', borderRadius: '3px', border: '1px solid #f5c6cb' }}>
+                          <strong>⚠️ If you get "403: access_denied":</strong>
+                          <ul style={{ margin: '5px 0', paddingLeft: '20px' }}>
+                            <li>Make sure OAuth consent screen is configured</li>
+                            <li>If app is in "Testing" mode, add your Google account email to "Test users"</li>
+                            <li>Verify redirect URI matches exactly: <code>http://localhost</code></li>
+                          </ul>
+                        </div>
+                      </div>
+                      <div className="form-group">
+                        <label>Client ID *</label>
+                        <input
+                          type="text"
+                          value={youtubeCredentials.clientId}
+                          onChange={(e) => setYoutubeCredentials(prev => ({ ...prev, clientId: e.target.value }))}
+                          placeholder="Enter Client ID (ends with .apps.googleusercontent.com)"
+                          style={{ width: '100%', padding: '8px' }}
+                        />
+                      </div>
+                      <div className="form-group">
+                        <label>Client Secret *</label>
+                        <input
+                          type="password"
+                          value={youtubeCredentials.clientSecret}
+                          onChange={(e) => setYoutubeCredentials(prev => ({ ...prev, clientSecret: e.target.value }))}
+                          placeholder="Enter Client Secret"
+                          style={{ width: '100%', padding: '8px' }}
+                        />
+                      </div>
+                      <div className="form-group">
+                        <label>Redirect URI</label>
+                        <input
+                          type="text"
+                          value={youtubeCredentials.redirectUri}
+                          onChange={(e) => setYoutubeCredentials(prev => ({ ...prev, redirectUri: e.target.value }))}
+                          placeholder="http://localhost (must match Google Cloud Console)"
+                          style={{ width: '100%', padding: '8px' }}
+                        />
+                        <small style={{ color: '#666', fontSize: '11px' }}>
+                          Must exactly match the redirect URI configured in Google Cloud Console
+                        </small>
+                      </div>
+                      <button onClick={handleSaveYoutubeCredentials} className="small-btn" style={{ backgroundColor: '#007bff' }}>
+                        💾 Save Credentials
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            {/* Video Selection */}
+            <div className="form-group">
+              <label>Video File</label>
+              <div className="input-with-button">
+                <input
+                  type="text"
+                  value={youtubeVideoPath ? youtubeVideoPath.split(/[/\\]/).pop() : 'No video selected'}
+                  placeholder="Select a video file to upload"
+                  readOnly
+                  style={{ flex: 1 }}
+                />
+                <button onClick={handleSelectYoutubeVideo} disabled={isYoutubeUploading} className="small-btn">
+                  📁 Select Video
+                </button>
+              </div>
+            </div>
+
+            {/* Video Metadata */}
+            <div className="form-group">
+              <label>Video Title *</label>
+              <input
+                type="text"
+                value={youtubeTitle}
+                onChange={(e) => setYoutubeTitle(e.target.value)}
+                placeholder="Enter video title"
+                disabled={isYoutubeUploading}
+                style={{ width: '100%', padding: '8px' }}
+              />
+            </div>
+
+            <div className="form-group">
+              <label>Description</label>
+              <textarea
+                value={youtubeDescription}
+                onChange={(e) => setYoutubeDescription(e.target.value)}
+                placeholder="Enter video description"
+                rows={4}
+                disabled={isYoutubeUploading}
+                style={{ width: '100%', padding: '8px' }}
+              />
+            </div>
+
+            <div className="form-row">
+              <div className="form-group" style={{ flex: 1 }}>
+                <label>Tags (comma-separated)</label>
+                <input
+                  type="text"
+                  value={youtubeTags}
+                  onChange={(e) => setYoutubeTags(e.target.value)}
+                  placeholder="tag1, tag2, tag3"
+                  disabled={isYoutubeUploading}
+                  style={{ width: '100%', padding: '8px' }}
+                />
+              </div>
+              <div className="form-group" style={{ flex: 1 }}>
+                <label>Privacy Status</label>
+                <select
+                  value={youtubePrivacy}
+                  onChange={(e) => setYoutubePrivacy(e.target.value)}
+                  disabled={isYoutubeUploading}
+                  style={{ width: '100%', padding: '8px' }}
+                >
+                  <option value="private">Private</option>
+                  <option value="unlisted">Unlisted</option>
+                  <option value="public">Public</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Upload Button */}
+            <button
+              onClick={handleYoutubeUpload}
+              disabled={isYoutubeUploading || !youtubeAuthenticated || !youtubeVideoPath || !youtubeTitle.trim()}
+              className="generate-button"
+              style={{ marginTop: '20px' }}
+            >
+              {isYoutubeUploading ? '⏳ Uploading...' : '📤 Upload to YouTube'}
+            </button>
+
+            {/* Upload Progress */}
+            {isYoutubeUploading && (
+              <div className="progress-section" style={{ marginTop: '20px' }}>
+                <div className="progress-bar-container">
+                  <div
+                    className="progress-bar-fill"
+                    style={{ width: `${youtubeUploadProgress}%` }}
+                  >
+                    <span className="progress-text">{youtubeUploadProgress}%</span>
+                  </div>
+                </div>
+                {youtubeUploadMessage && (
+                  <p className="progress-message">{youtubeUploadMessage}</p>
+                )}
+              </div>
+            )}
+
+            {/* Status Message */}
+            {status && <p className="status-message">{status}</p>}
           </div>
         </div>
       )}

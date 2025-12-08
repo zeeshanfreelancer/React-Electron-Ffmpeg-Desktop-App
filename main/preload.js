@@ -47,4 +47,31 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.removeAllListeners('scrolling-video-cancelled');
     ipcRenderer.removeAllListeners('batch-process-done');
   },
+
+  // YouTube Upload
+  youtubeSaveCredentials: (credentials) => ipcRenderer.invoke('youtube-save-credentials', credentials),
+  youtubeCheckAuth: () => ipcRenderer.invoke('youtube-check-auth'),
+  youtubeAuthenticate: () => ipcRenderer.send('youtube-authenticate'),
+  youtubeUploadVideo: (videoPath, metadata) => ipcRenderer.send('youtube-upload-video', { videoPath, metadata }),
+  youtubeRevokeToken: () => ipcRenderer.invoke('youtube-revoke-token'),
+  youtubeOpenUrl: (url) => ipcRenderer.invoke('youtube-open-url', url),
+  youtubeSendAuthCode: (code) => ipcRenderer.send('youtube-auth-code', code),
+
+  // YouTube event listeners
+  onYoutubeAuthUrl: (callback) => ipcRenderer.on('youtube-auth-url', (_, url) => callback(url)),
+  onYoutubeAuthSuccess: (callback) => ipcRenderer.on('youtube-auth-success', () => callback()),
+  onYoutubeUploadProgress: (callback) => ipcRenderer.on('youtube-upload-progress', (_, progress) => callback(progress)),
+  onYoutubeUploadSuccess: (callback) => ipcRenderer.on('youtube-upload-success', (_, result) => callback(result)),
+  onYoutubeUploadError: (callback) => ipcRenderer.on('youtube-upload-error', (_, error) => callback(error)),
+  onYoutubeError: (callback) => ipcRenderer.on('youtube-error', (_, error) => callback(error)),
+
+  // Cleanup YouTube listeners
+  removeYoutubeListeners: () => {
+    ipcRenderer.removeAllListeners('youtube-auth-url');
+    ipcRenderer.removeAllListeners('youtube-auth-success');
+    ipcRenderer.removeAllListeners('youtube-upload-progress');
+    ipcRenderer.removeAllListeners('youtube-upload-success');
+    ipcRenderer.removeAllListeners('youtube-upload-error');
+    ipcRenderer.removeAllListeners('youtube-error');
+  },
 });

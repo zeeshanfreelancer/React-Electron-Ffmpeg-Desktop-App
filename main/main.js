@@ -1,13 +1,20 @@
-const { app, BrowserWindow, ipcMain, dialog, Menu } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, shell } = require('electron');
 const path = require('path');
 const fs = require('fs').promises;
+const http = require('http');
+const url = require('url');
 const { generateScrollingVideo, saveProject, loadProject, batchProcess } = require('./videoGenerator');
+const youtubeUploader = require('./youtubeUploader');
 
 // Cancellation state
 let currentVideoGeneration = {
   cancelled: false,
   webContents: null,
 };
+
+// OAuth callback server
+let oauthCallbackServer = null;
+let oauthCodeResolver = null;
 
 // Helper: Parse subtitle file (SRT or VTT)
 function parseSubtitleFile(content, format) {
@@ -334,6 +341,207 @@ function registerIpcHandlers() {
       throw new Error(`Failed to generate preview: ${error.message}`);
     }
   });
+
+  // 📤 YouTube Upload Handlers
+  // Save YouTube OAuth credentials
+  ipcMain.handle('youtube-save-credentials', async (event, credentials) => {
+    try {
+      await youtubeUploader.saveCredentials(credentials);
+      return { success: true };
+    } catch (error) {
+      throw new Error(`Failed to save credentials: ${error.message}`);
+    }
+  });
+
+  // Check if authenticated
+  ipcMain.handle('youtube-check-auth', async () => {
+    try {
+      const isAuth = await youtubeUploader.isAuthenticated();
+      return { authenticated: isAuth };
+    } catch (error) {
+      return { authenticated: false };
+    }
+  });
+
+  // Start OAuth callback server on a non-privileged port
+  function startOAuthCallbackServer(port = 8080) {
+    return new Promise((resolve, reject) => {
+      if (oauthCallbackServer) {
+        // Server already running
+        resolve(port);
+        return;
+      }
+
+      oauthCallbackServer = http.createServer((req, res) => {
+        const parsedUrl = url.parse(req.url, true);
+        const code = parsedUrl.query.code;
+        const error = parsedUrl.query.error;
+
+        if (error) {
+          const errorDescription = parsedUrl.query.error_description || error;
+          res.writeHead(200, { 'Content-Type': 'text/html' });
+          res.end(`
+            <html>
+              <head><title>Authorization Failed</title></head>
+              <body style="font-family: Arial; text-align: center; padding: 50px;">
+                <h2 style="color: #d32f2f;">❌ Authorization Failed</h2>
+                <p>${errorDescription}</p>
+                <p>You can close this window and try again.</p>
+              </body>
+            </html>
+          `);
+          
+          if (oauthCodeResolver) {
+            oauthCodeResolver.reject(new Error(errorDescription));
+            oauthCodeResolver = null;
+          }
+          stopOAuthCallbackServer();
+          return;
+        }
+
+        if (code) {
+          res.writeHead(200, { 'Content-Type': 'text/html' });
+          res.end(`
+            <html>
+              <head><title>Authorization Successful</title></head>
+              <body style="font-family: Arial; text-align: center; padding: 50px;">
+                <h2 style="color: #28a745;">✅ Authorization Successful!</h2>
+                <p>You can close this window now.</p>
+                <p>The app will continue automatically.</p>
+              </body>
+            </html>
+          `);
+
+          // Send code to the OAuth handler
+          if (oauthCodeResolver) {
+            oauthCodeResolver.resolve(code);
+            oauthCodeResolver = null;
+          }
+          
+          // Stop server after a short delay
+          setTimeout(() => {
+            stopOAuthCallbackServer();
+          }, 1000);
+        } else {
+          res.writeHead(200, { 'Content-Type': 'text/html' });
+          res.end(`
+            <html>
+              <head><title>Waiting for Authorization</title></head>
+              <body style="font-family: Arial; text-align: center; padding: 50px;">
+                <h2>Waiting for authorization...</h2>
+                <p>Please complete the authorization in your browser.</p>
+              </body>
+            </html>
+          `);
+        }
+      });
+
+      // Try to listen on the specified port, or find an available port
+      const server = oauthCallbackServer.listen(port, 'localhost', () => {
+        resolve(server.address().port);
+      });
+
+      server.on('error', (err) => {
+        if (err.code === 'EADDRINUSE') {
+          // Try next port
+          if (port < 8100) {
+            stopOAuthCallbackServer();
+            startOAuthCallbackServer(port + 1)
+              .then(resolve)
+              .catch(reject);
+          } else {
+            reject(new Error('Could not find an available port for OAuth callback. Please use manual code entry.'));
+          }
+        } else {
+          reject(err);
+        }
+      });
+    });
+  }
+
+  function stopOAuthCallbackServer() {
+    if (oauthCallbackServer) {
+      oauthCallbackServer.close();
+      oauthCallbackServer = null;
+    }
+  }
+
+  // Authenticate with YouTube
+  ipcMain.on('youtube-authenticate', async (event) => {
+    try {
+      const credentials = await youtubeUploader.loadCredentials();
+      if (!credentials) {
+        event.sender.send('youtube-error', 'No credentials found. Please set up OAuth credentials first.');
+        return;
+      }
+
+      // Try to start the callback server
+      try {
+        await startOAuthCallbackServer();
+        event.sender.send('youtube-callback-server-ready');
+      } catch (serverError) {
+        // If server can't start (e.g., port 80 in use), fall back to manual entry
+        console.log('Callback server not available, using manual code entry:', serverError.message);
+        event.sender.send('youtube-callback-server-failed', serverError.message);
+      }
+
+      // Set up code resolver
+      oauthCodeResolver = {
+        resolve: (code) => {
+          // Send code via IPC
+          ipcMain.emit('youtube-auth-code', event, code);
+        },
+        reject: (error) => {
+          event.sender.send('youtube-error', error.message);
+        }
+      };
+
+      await youtubeUploader.authorize(credentials, event, ipcMain);
+    } catch (error) {
+      stopOAuthCallbackServer();
+      if (error.message && !error.message.includes('youtube-auth-code')) {
+        event.sender.send('youtube-error', error.message);
+      }
+    }
+  });
+
+  // Handle auth code from OAuth callback (manual entry fallback)
+  ipcMain.on('youtube-auth-code', (event, code) => {
+    if (oauthCodeResolver && oauthCodeResolver.resolve) {
+      oauthCodeResolver.resolve(code);
+      oauthCodeResolver = null;
+    }
+  });
+
+  // Upload video to YouTube
+  ipcMain.on('youtube-upload-video', async (event, { videoPath, metadata }) => {
+    try {
+      const progressCallback = (progress) => {
+        event.sender.send('youtube-upload-progress', progress);
+      };
+
+      const result = await youtubeUploader.uploadVideo(videoPath, metadata, progressCallback, ipcMain);
+      event.sender.send('youtube-upload-success', result);
+    } catch (error) {
+      event.sender.send('youtube-upload-error', error.message);
+    }
+  });
+
+  // Revoke token and logout
+  ipcMain.handle('youtube-revoke-token', async () => {
+    try {
+      await youtubeUploader.revokeToken();
+      return { success: true };
+    } catch (error) {
+      throw new Error(`Failed to revoke token: ${error.message}`);
+    }
+  });
+
+  // Open URL in browser (for OAuth)
+  ipcMain.handle('youtube-open-url', async (event, url) => {
+    await shell.openExternal(url);
+    return { success: true };
+  });
 }
 
 // Handle uncaught exceptions to prevent crashes
@@ -362,6 +570,11 @@ app.whenReady().then(() => {
 
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') {
+    // Clean up OAuth callback server
+    if (oauthCallbackServer) {
+      oauthCallbackServer.close();
+      oauthCallbackServer = null;
+    }
     app.quit();
   }
 });
