@@ -4,10 +4,16 @@ const fs = require('fs').promises;
 const http = require('http');
 const url = require('url');
 const { generateScrollingVideo, saveProject, loadProject, batchProcess } = require('./videoGenerator');
+const { generatePanZoomVideo } = require('./panZoomVideoGenerator');
 const youtubeUploader = require('./youtubeUploader');
 
 // Cancellation state
 let currentVideoGeneration = {
+  cancelled: false,
+  webContents: null,
+};
+
+let currentPanZoomGeneration = {
   cancelled: false,
   webContents: null,
 };
@@ -205,6 +211,15 @@ function registerIpcHandlers() {
     return result.filePaths[0];
   });
 
+  // 📁 Select image folder
+  ipcMain.handle('select-image-folder', async () => {
+    const result = await dialog.showOpenDialog({
+      properties: ['openDirectory'],
+    });
+    if (result.canceled) return null;
+    return result.filePaths[0];
+  });
+
   // 💾 Save project
   ipcMain.handle('save-project', async (event, config) => {
     const result = await dialog.showSaveDialog({
@@ -339,6 +354,47 @@ function registerIpcHandlers() {
       return { success: true, message: 'Preview generation not yet implemented' };
     } catch (error) {
       throw new Error(`Failed to generate preview: ${error.message}`);
+    }
+  });
+
+  // 🎬 Pan/Zoom Video Generator Handlers
+  ipcMain.on('generate-panzoom-video', async (event, options) => {
+    // Reset cancellation flag
+    currentPanZoomGeneration.cancelled = false;
+    currentPanZoomGeneration.webContents = event.sender;
+
+    try {
+      const progressCallback = (progress) => {
+        if (currentPanZoomGeneration.cancelled) {
+          throw new Error('Video generation cancelled');
+        }
+        event.sender.send('panzoom-video-progress', progress);
+      };
+
+      const shouldCancel = () => currentPanZoomGeneration.cancelled;
+
+      const result = await generatePanZoomVideo(options, progressCallback, shouldCancel);
+      if (!currentPanZoomGeneration.cancelled) {
+        event.sender.send('panzoom-video-done', result);
+      }
+    } catch (error) {
+      if (!currentPanZoomGeneration.cancelled) {
+        event.sender.send('panzoom-video-error', error.message);
+      } else {
+        event.sender.send('panzoom-video-cancelled');
+      }
+    } finally {
+      // Reset state
+      currentPanZoomGeneration.cancelled = false;
+      currentPanZoomGeneration.webContents = null;
+    }
+  });
+
+  // 🚫 Cancel pan/zoom video generation
+  ipcMain.on('cancel-panzoom-video', () => {
+    currentPanZoomGeneration.cancelled = true;
+    if (currentPanZoomGeneration.webContents) {
+      currentPanZoomGeneration.webContents.send('panzoom-video-cancelled');
     }
   });
 

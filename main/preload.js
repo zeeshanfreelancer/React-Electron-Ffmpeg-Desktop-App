@@ -12,6 +12,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // File operations
   selectOutputDirectory: () => ipcRenderer.invoke('select-output-directory'),
+  selectImageFolder: () => ipcRenderer.invoke('select-image-folder'),
   saveProject: (config) => ipcRenderer.invoke('save-project', config),
   loadProject: () => ipcRenderer.invoke('load-project'),
 
@@ -23,6 +24,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   generateScrollingVideo: (options) => ipcRenderer.send('generate-scrolling-video', options),
   cancelScrollingVideo: () => ipcRenderer.send('cancel-scrolling-video'),
   batchProcessVideos: (configs) => ipcRenderer.send('batch-process-videos', configs),
+  
+  // Pan/Zoom Video generation
+  generatePanZoomVideo: (options) => ipcRenderer.send('generate-panzoom-video', options),
+  cancelPanZoomVideo: () => ipcRenderer.send('cancel-panzoom-video'),
 
   // Preview
   generatePreviewFrame: (options, frameTime) => ipcRenderer.invoke('generate-preview-frame', options, frameTime),
@@ -39,6 +44,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onBatchProcessDone: (callback) =>
     ipcRenderer.on('batch-process-done', (_, results) => callback(results)),
 
+  // Pan/Zoom Video event listeners
+  onPanZoomVideoProgress: (callback) =>
+    ipcRenderer.on('panzoom-video-progress', (_, progress) => callback(progress)),
+  onPanZoomVideoDone: (callback) =>
+    ipcRenderer.on('panzoom-video-done', (_, result) => callback(result)),
+  onPanZoomVideoError: (callback) =>
+    ipcRenderer.on('panzoom-video-error', (_, err) => callback(err)),
+  onPanZoomVideoCancelled: (callback) =>
+    ipcRenderer.on('panzoom-video-cancelled', () => callback()),
+
   // Cleanup listeners
   removeScrollingVideoListeners: () => {
     ipcRenderer.removeAllListeners('scrolling-video-progress');
@@ -46,6 +61,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.removeAllListeners('scrolling-video-error');
     ipcRenderer.removeAllListeners('scrolling-video-cancelled');
     ipcRenderer.removeAllListeners('batch-process-done');
+  },
+  removePanZoomVideoListeners: () => {
+    ipcRenderer.removeAllListeners('panzoom-video-progress');
+    ipcRenderer.removeAllListeners('panzoom-video-done');
+    ipcRenderer.removeAllListeners('panzoom-video-error');
+    ipcRenderer.removeAllListeners('panzoom-video-cancelled');
   },
 
   // YouTube Upload

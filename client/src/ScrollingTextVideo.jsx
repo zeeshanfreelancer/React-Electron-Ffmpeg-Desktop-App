@@ -88,6 +88,21 @@ function ScrollingTextVideo() {
   const [youtubeAuthCode, setYoutubeAuthCode] = useState('');
   const [showAuthCodeInput, setShowAuthCodeInput] = useState(false);
 
+  // Pan/Zoom Video Generator state
+  const [panZoomImageFolder, setPanZoomImageFolder] = useState('');
+  const [panZoomOutputFolder, setPanZoomOutputFolder] = useState('');
+  const [panZoomVideoWidth, setPanZoomVideoWidth] = useState(720);
+  const [panZoomVideoHeight, setPanZoomVideoHeight] = useState(1280);
+  const [panZoomFps, setPanZoomFps] = useState(24);
+  const [panZoomImageDuration, setPanZoomImageDuration] = useState(3.2);
+  const [panZoomBatchSize, setPanZoomBatchSize] = useState(5);
+  const [panZoomShakeMagnitude, setPanZoomShakeMagnitude] = useState(3);
+  const [panZoomZoomMagnitude, setPanZoomZoomMagnitude] = useState(0.05);
+  const [panZoomPanMagnitude, setPanZoomPanMagnitude] = useState(30);
+  const [isPanZoomGenerating, setIsPanZoomGenerating] = useState(false);
+  const [panZoomProgress, setPanZoomProgress] = useState(0);
+  const [panZoomProgressMessage, setPanZoomProgressMessage] = useState('');
+
   useEffect(() => {
     window.electronAPI.onScrollingVideoProgress((progressData) => {
       const canUpdateProgress =
@@ -142,9 +157,42 @@ function ScrollingTextVideo() {
       setStatus('⚠️ Video generation cancelled');
     });
 
+    // Pan/Zoom Video Generator event listeners
+    window.electronAPI.onPanZoomVideoProgress((progressData) => {
+      const canUpdateProgress =
+        typeof progressData.progress === 'number' && !Number.isNaN(progressData.progress);
+
+      if (canUpdateProgress) {
+        setPanZoomProgress(progressData.progress);
+      }
+      setPanZoomProgressMessage(progressData.message || 'Processing...');
+    });
+
+    window.electronAPI.onPanZoomVideoDone((result) => {
+      setIsPanZoomGenerating(false);
+      setPanZoomProgress(100);
+      setPanZoomProgressMessage('');
+      setStatus(`✅ Pan/Zoom videos created successfully! Total: ${result.totalVideos} videos in ${result.outputFolder}`);
+    });
+
+    window.electronAPI.onPanZoomVideoError((error) => {
+      setIsPanZoomGenerating(false);
+      setPanZoomProgress(0);
+      setPanZoomProgressMessage('');
+      setStatus(`❌ Error: ${error}`);
+    });
+
+    window.electronAPI.onPanZoomVideoCancelled(() => {
+      setIsPanZoomGenerating(false);
+      setPanZoomProgress(0);
+      setPanZoomProgressMessage('');
+      setStatus('⚠️ Video generation cancelled');
+    });
+
     return () => {
       window.electronAPI.removeScrollingVideoListeners();
       window.electronAPI.removeYoutubeListeners();
+      window.electronAPI.removePanZoomVideoListeners();
     };
   }, []);
 
@@ -393,6 +441,62 @@ function ScrollingTextVideo() {
       setOutputDirectory(path);
       setStatus('');
     }
+  };
+
+  const handleSelectPanZoomImageFolder = async () => {
+    const path = await window.electronAPI.selectImageFolder();
+    if (path) {
+      setPanZoomImageFolder(path);
+      setStatus('');
+    }
+  };
+
+  const handleSelectPanZoomOutputFolder = async () => {
+    const path = await window.electronAPI.selectOutputDirectory();
+    if (path) {
+      setPanZoomOutputFolder(path);
+      setStatus('');
+    }
+  };
+
+  const handleGeneratePanZoomVideo = () => {
+    if (!panZoomImageFolder) {
+      setStatus('❌ Please select an image folder');
+      return;
+    }
+
+    if (!panZoomOutputFolder) {
+      setStatus('❌ Please select an output folder');
+      return;
+    }
+
+    setIsPanZoomGenerating(true);
+    setPanZoomProgress(0);
+    setPanZoomProgressMessage('Initializing...');
+    setStatus('🎬 Generating pan/zoom videos...');
+
+    const options = {
+      imageFolder: panZoomImageFolder,
+      outputFolder: panZoomOutputFolder,
+      videoWidth: parseInt(panZoomVideoWidth),
+      videoHeight: parseInt(panZoomVideoHeight),
+      fps: parseInt(panZoomFps),
+      imageDuration: parseFloat(panZoomImageDuration),
+      batchSize: parseInt(panZoomBatchSize),
+      shakeMagnitude: parseFloat(panZoomShakeMagnitude),
+      zoomMagnitude: parseFloat(panZoomZoomMagnitude),
+      panMagnitude: parseFloat(panZoomPanMagnitude),
+    };
+
+    window.electronAPI.generatePanZoomVideo(options);
+  };
+
+  const handleCancelPanZoomVideo = () => {
+    window.electronAPI.cancelPanZoomVideo();
+    setIsPanZoomGenerating(false);
+    setPanZoomProgress(0);
+    setPanZoomProgressMessage('');
+    setStatus('⚠️ Video generation cancelled');
   };
 
   const handleSocialPreset = (preset) => {
@@ -1355,8 +1459,183 @@ function ScrollingTextVideo() {
       {activeMainTab === 'video' && (
         <div className="form-section">
           <div className="section-content">
-            <h2>🎬 Video Generator</h2>
-            <p>Video Generator functionality will be implemented here.</p>
+            <h2>🎬 Pan/Zoom Video Generator</h2>
+            <p style={{ marginBottom: '20px', color: '#666' }}>
+              Create videos from images with pan, zoom, and shake effects. Images are randomly shuffled and processed in batches.
+            </p>
+
+            {/* Folder Selection */}
+            <div className="form-group">
+              <label>Image Folder</label>
+              <div className="input-with-button">
+                <input
+                  type="text"
+                  value={panZoomImageFolder || 'No folder selected'}
+                  placeholder="Select folder containing images"
+                  readOnly
+                  style={{ flex: 1 }}
+                />
+                <button onClick={handleSelectPanZoomImageFolder} disabled={isPanZoomGenerating} className="small-btn">
+                  📁 Select Folder
+                </button>
+              </div>
+              {panZoomImageFolder && (
+                <p className="file-info">Selected: {panZoomImageFolder}</p>
+              )}
+            </div>
+
+            <div className="form-group">
+              <label>Output Folder</label>
+              <div className="input-with-button">
+                <input
+                  type="text"
+                  value={panZoomOutputFolder || 'No folder selected'}
+                  placeholder="Select output folder for videos"
+                  readOnly
+                  style={{ flex: 1 }}
+                />
+                <button onClick={handleSelectPanZoomOutputFolder} disabled={isPanZoomGenerating} className="small-btn">
+                  📁 Select Folder
+                </button>
+              </div>
+              {panZoomOutputFolder && (
+                <p className="file-info">Selected: {panZoomOutputFolder}</p>
+              )}
+            </div>
+
+            {/* Video Settings */}
+            <div className="form-row-four">
+              <div className="form-group">
+                <label>Video Width (px)</label>
+                <input
+                  type="number"
+                  value={panZoomVideoWidth}
+                  onChange={(e) => setPanZoomVideoWidth(e.target.value)}
+                  min="1"
+                  disabled={isPanZoomGenerating}
+                />
+              </div>
+              <div className="form-group">
+                <label>Video Height (px)</label>
+                <input
+                  type="number"
+                  value={panZoomVideoHeight}
+                  onChange={(e) => setPanZoomVideoHeight(e.target.value)}
+                  min="1"
+                  disabled={isPanZoomGenerating}
+                />
+              </div>
+              <div className="form-group">
+                <label>FPS</label>
+                <input
+                  type="number"
+                  value={panZoomFps}
+                  onChange={(e) => setPanZoomFps(e.target.value)}
+                  min="1"
+                  max="60"
+                  disabled={isPanZoomGenerating}
+                />
+              </div>
+              <div className="form-group">
+                <label>Image Duration (seconds)</label>
+                <input
+                  type="number"
+                  value={panZoomImageDuration}
+                  onChange={(e) => setPanZoomImageDuration(e.target.value)}
+                  min="0.1"
+                  step="0.1"
+                  disabled={isPanZoomGenerating}
+                />
+              </div>
+            </div>
+
+            {/* Effect Settings */}
+            <div className="form-row-three">
+              <div className="form-group">
+                <label>Shake Magnitude</label>
+                <input
+                  type="number"
+                  value={panZoomShakeMagnitude}
+                  onChange={(e) => setPanZoomShakeMagnitude(e.target.value)}
+                  min="0"
+                  step="0.5"
+                  disabled={isPanZoomGenerating}
+                />
+                <small style={{ color: '#666', fontSize: '11px' }}>Subtle shake effect (pixels)</small>
+              </div>
+              <div className="form-group">
+                <label>Zoom Magnitude</label>
+                <input
+                  type="number"
+                  value={panZoomZoomMagnitude}
+                  onChange={(e) => setPanZoomZoomMagnitude(e.target.value)}
+                  min="0"
+                  max="0.5"
+                  step="0.01"
+                  disabled={isPanZoomGenerating}
+                />
+                <small style={{ color: '#666', fontSize: '11px' }}>Slight zoom in (0-0.5)</small>
+              </div>
+              <div className="form-group">
+                <label>Pan Magnitude</label>
+                <input
+                  type="number"
+                  value={panZoomPanMagnitude}
+                  onChange={(e) => setPanZoomPanMagnitude(e.target.value)}
+                  min="0"
+                  step="5"
+                  disabled={isPanZoomGenerating}
+                />
+                <small style={{ color: '#666', fontSize: '11px' }}>Maximum pan distance (pixels)</small>
+              </div>
+            </div>
+
+            {/* Batch Settings */}
+            <div className="form-group">
+              <label>Batch Size</label>
+              <input
+                type="number"
+                value={panZoomBatchSize}
+                onChange={(e) => setPanZoomBatchSize(e.target.value)}
+                min="1"
+                disabled={isPanZoomGenerating}
+              />
+              <small style={{ color: '#666', fontSize: '11px' }}>Number of images per video</small>
+            </div>
+
+            {/* Generate Button */}
+            <button
+              className="generate-button"
+              onClick={handleGeneratePanZoomVideo}
+              disabled={isPanZoomGenerating || !panZoomImageFolder || !panZoomOutputFolder}
+            >
+              {isPanZoomGenerating ? '⏳ Generating...' : '🎥 Generate Pan/Zoom Videos'}
+            </button>
+
+            {/* Progress Bar */}
+            {isPanZoomGenerating && (
+              <div className="progress-section">
+                <div className="progress-bar-container">
+                  <div
+                    className="progress-bar-fill"
+                    style={{ width: `${panZoomProgress}%` }}
+                  >
+                    <span className="progress-text">{panZoomProgress}%</span>
+                  </div>
+                </div>
+                {panZoomProgressMessage && (
+                  <p className="progress-message">{panZoomProgressMessage}</p>
+                )}
+                <div className="cancel-button-container">
+                  <button onClick={handleCancelPanZoomVideo} className="cancel-button">
+                    ❌ Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* Status Message */}
+            {status && <p className="status-message">{status}</p>}
           </div>
         </div>
       )}
