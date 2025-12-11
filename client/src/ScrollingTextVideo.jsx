@@ -1459,48 +1459,39 @@ function ScrollingTextVideo() {
       {activeMainTab === 'video' && (
         <div className="form-section">
           <div className="section-content">
-            <h2>🎬 Pan/Zoom Video Generator</h2>
-            <p style={{ marginBottom: '20px', color: '#666' }}>
-              Create videos from images with pan, zoom, and shake effects. Images are randomly shuffled and processed in batches.
-            </p>
-
-            {/* Folder Selection */}
-            <div className="form-group">
-              <label>Image Folder</label>
-              <div className="input-with-button">
-                <input
-                  type="text"
-                  value={panZoomImageFolder || 'No folder selected'}
-                  placeholder="Select folder containing images"
-                  readOnly
-                  style={{ flex: 1 }}
-                />
-                <button onClick={handleSelectPanZoomImageFolder} disabled={isPanZoomGenerating} className="small-btn">
-                  📁 Select Folder
-                </button>
+            {/* Folder Selection - In One Row */}
+            <div className="form-row">
+              <div className="form-group">
+                <label>Image Folder</label>
+                <div className="input-with-button">
+                  <input
+                    type="text"
+                    value={panZoomImageFolder || 'No folder selected'}
+                    placeholder="Select folder containing images"
+                    readOnly
+                    style={{ flex: 1 }}
+                  />
+                  <button onClick={handleSelectPanZoomImageFolder} disabled={isPanZoomGenerating} className="small-btn">
+                    📁 Select Folder
+                  </button>
+                </div>
               </div>
-              {panZoomImageFolder && (
-                <p className="file-info">Selected: {panZoomImageFolder}</p>
-              )}
-            </div>
 
-            <div className="form-group">
-              <label>Output Folder</label>
-              <div className="input-with-button">
-                <input
-                  type="text"
-                  value={panZoomOutputFolder || 'No folder selected'}
-                  placeholder="Select output folder for videos"
-                  readOnly
-                  style={{ flex: 1 }}
-                />
-                <button onClick={handleSelectPanZoomOutputFolder} disabled={isPanZoomGenerating} className="small-btn">
-                  📁 Select Folder
-                </button>
+              <div className="form-group">
+                <label>Output Folder</label>
+                <div className="input-with-button">
+                  <input
+                    type="text"
+                    value={panZoomOutputFolder || 'No folder selected'}
+                    placeholder="Select output folder for videos"
+                    readOnly
+                    style={{ flex: 1 }}
+                  />
+                  <button onClick={handleSelectPanZoomOutputFolder} disabled={isPanZoomGenerating} className="small-btn">
+                    📁 Select Folder
+                  </button>
+                </div>
               </div>
-              {panZoomOutputFolder && (
-                <p className="file-info">Selected: {panZoomOutputFolder}</p>
-              )}
             </div>
 
             {/* Video Settings */}
@@ -1549,8 +1540,8 @@ function ScrollingTextVideo() {
               </div>
             </div>
 
-            {/* Effect Settings */}
-            <div className="form-row-three">
+            {/* Effect Settings - All in One Row */}
+            <div className="form-row-four">
               <div className="form-group">
                 <label>Shake Magnitude</label>
                 <input
@@ -1588,19 +1579,17 @@ function ScrollingTextVideo() {
                 />
                 <small style={{ color: '#666', fontSize: '11px' }}>Maximum pan distance (pixels)</small>
               </div>
-            </div>
-
-            {/* Batch Settings */}
-            <div className="form-group">
-              <label>Batch Size</label>
-              <input
-                type="number"
-                value={panZoomBatchSize}
-                onChange={(e) => setPanZoomBatchSize(e.target.value)}
-                min="1"
-                disabled={isPanZoomGenerating}
-              />
-              <small style={{ color: '#666', fontSize: '11px' }}>Number of images per video</small>
+              <div className="form-group">
+                <label>Batch Size</label>
+                <input
+                  type="number"
+                  value={panZoomBatchSize}
+                  onChange={(e) => setPanZoomBatchSize(e.target.value)}
+                  min="1"
+                  disabled={isPanZoomGenerating}
+                />
+                <small style={{ color: '#666', fontSize: '11px' }}>Number of images per video</small>
+              </div>
             </div>
 
             {/* Generate Button */}
