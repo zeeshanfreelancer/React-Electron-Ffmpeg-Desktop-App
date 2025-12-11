@@ -79,6 +79,10 @@ function drawTextWithEffects(ctx, text, x, y, options) {
   if (italic) fontStyle += 'italic ';
   if (bold) fontStyle += 'bold ';
   ctx.font = `${fontStyle}${fontSize}px ${fontFamily}`;
+  
+  // Set text alignment to center for horizontal centering
+  ctx.textAlign = 'center';
+  // Keep default textBaseline ('alphabetic') for compatibility with underline calculation
 
   // Apply gradient or solid color
   if (gradient && gradient.enabled && gradient.colors && gradient.colors.length > 0) {
@@ -160,20 +164,20 @@ function applyAnimation(frameNum, totalFrames, animationType, baseY) {
 }
 
 // Helper: Calculate scroll position based on direction
-function calculateScrollPosition(frameNum, scrollPerFrame, textHeight, videoHeight, scrollDirection) {
+function calculateScrollPosition(frameNum, scrollPerFrame, textHeight, videoWidth, videoHeight, scrollDirection) {
   const currentOffset = frameNum * scrollPerFrame;
 
   switch (scrollDirection) {
     case 'horizontal':
-      return { x: videoHeight - currentOffset, y: videoHeight / 2, angle: 0 };
+      return { x: videoWidth - currentOffset, y: videoHeight / 2, angle: 0 };
     case 'diagonal':
       const diagonalOffset = currentOffset * 0.707; // cos(45°)
       return { x: diagonalOffset, y: videoHeight - diagonalOffset, angle: 0 };
     case 'fixed':
-      return { x: videoHeight / 2, y: videoHeight / 2, angle: 0 };
+      return { x: videoWidth / 2, y: videoHeight / 2, angle: 0 };
     case 'vertical': // default
     default:
-      return { x: videoHeight / 2, y: videoHeight - currentOffset, angle: 0 };
+      return { x: videoWidth / 2, y: videoHeight - currentOffset, angle: 0 };
   }
 }
 
@@ -482,6 +486,7 @@ async function generateScrollingVideo(options, progressCallback, shouldCancel) {
             frameNum,
             scrollPerFrame,
             maxTextHeight,
+            width,
             height,
             blockOptions.scrollDirection || scrollDirection
           );
