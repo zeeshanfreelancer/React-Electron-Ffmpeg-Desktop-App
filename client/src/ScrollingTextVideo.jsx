@@ -96,6 +96,7 @@ function ScrollingTextVideo() {
   const [panZoomFps, setPanZoomFps] = useState(24);
   const [panZoomImageDuration, setPanZoomImageDuration] = useState(3.2);
   const [panZoomBatchSize, setPanZoomBatchSize] = useState(5);
+  const [panZoomMaxVideos, setPanZoomMaxVideos] = useState(0);
   const [panZoomShakeMagnitude, setPanZoomShakeMagnitude] = useState(3);
   const [panZoomZoomMagnitude, setPanZoomZoomMagnitude] = useState(0.05);
   const [panZoomPanMagnitude, setPanZoomPanMagnitude] = useState(30);
@@ -483,6 +484,7 @@ function ScrollingTextVideo() {
       fps: parseInt(panZoomFps),
       imageDuration: parseFloat(panZoomImageDuration),
       batchSize: parseInt(panZoomBatchSize),
+      maxVideos: parseInt(panZoomMaxVideos) || 0, // 0 means create all possible videos
       shakeMagnitude: parseFloat(panZoomShakeMagnitude),
       zoomMagnitude: parseFloat(panZoomZoomMagnitude),
       panMagnitude: parseFloat(panZoomPanMagnitude),
@@ -1540,6 +1542,32 @@ function ScrollingTextVideo() {
               </div>
             </div>
 
+            {/* Batch Settings - In One Row */}
+            <div className="form-row">
+              <div className="form-group">
+                <label>Batch Size</label>
+                <input
+                  type="number"
+                  value={panZoomBatchSize}
+                  onChange={(e) => setPanZoomBatchSize(e.target.value)}
+                  min="1"
+                  disabled={isPanZoomGenerating}
+                />
+                <small style={{ color: '#666', fontSize: '11px' }}>Number of images per video</small>
+              </div>
+              <div className="form-group">
+                <label>Max Videos to Create</label>
+                <input
+                  type="number"
+                  value={panZoomMaxVideos}
+                  onChange={(e) => setPanZoomMaxVideos(e.target.value)}
+                  min="0"
+                  disabled={isPanZoomGenerating}
+                />
+                <small style={{ color: '#666', fontSize: '11px' }}>0 = create all possible videos</small>
+              </div>
+            </div>
+
             {/* Effect Settings - All in One Row */}
             <div className="form-row-four">
               <div className="form-group">
@@ -1578,17 +1606,6 @@ function ScrollingTextVideo() {
                   disabled={isPanZoomGenerating}
                 />
                 <small style={{ color: '#666', fontSize: '11px' }}>Maximum pan distance (pixels)</small>
-              </div>
-              <div className="form-group">
-                <label>Batch Size</label>
-                <input
-                  type="number"
-                  value={panZoomBatchSize}
-                  onChange={(e) => setPanZoomBatchSize(e.target.value)}
-                  min="1"
-                  disabled={isPanZoomGenerating}
-                />
-                <small style={{ color: '#666', fontSize: '11px' }}>Number of images per video</small>
               </div>
             </div>
 

@@ -21,6 +21,7 @@ async function generatePanZoomVideo(options, progressCallback, shouldCancel) {
     fps = 24,
     imageDuration = 3.2,
     batchSize = 5,
+    maxVideos = 0, // 0 means create all possible videos
     shakeMagnitude = 3,
     zoomMagnitude = 0.05,
     panMagnitude = 30,
@@ -50,23 +51,26 @@ async function generatePanZoomVideo(options, progressCallback, shouldCancel) {
   // Process in batches
   let totalVideos = 0;
   const totalBatches = Math.ceil(imageFiles.length / batchSize);
+  
+  // Limit the number of videos if maxVideos is set
+  const videosToCreate = maxVideos > 0 ? Math.min(maxVideos, totalBatches) : totalBatches;
 
-  for (let i = 0; i < imageFiles.length; i += batchSize) {
+  for (let i = 0; i < imageFiles.length && totalVideos < videosToCreate; i += batchSize) {
     if (shouldCancel && shouldCancel()) {
       throw new Error('Video generation cancelled');
     }
 
     const batch = imageFiles.slice(i, i + batchSize);
     totalVideos++;
-    const batchNum = Math.floor(i / batchSize) + 1;
+    const batchNum = totalVideos;
 
     if (progressCallback) {
       progressCallback({
         type: 'batch',
-        progress: (batchNum / totalBatches) * 100,
-        message: `Creating Video ${totalVideos} with ${batch.length} images...`,
+        progress: (batchNum / videosToCreate) * 100,
+        message: `Creating Video ${totalVideos} of ${videosToCreate} with ${batch.length} images...`,
         current: batchNum,
-        total: totalBatches,
+        total: videosToCreate,
       });
     }
 
