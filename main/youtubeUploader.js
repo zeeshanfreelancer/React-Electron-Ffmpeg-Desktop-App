@@ -50,6 +50,10 @@ async function authorize(credentials, event, ipcMain) {
   try {
     const token = await fsPromises.readFile(TOKEN_PATH, 'utf-8');
     oauth2Client.setCredentials(JSON.parse(token));
+    // If the token already exists, consider auth successful for the renderer.
+    if (event && event.sender) {
+      event.sender.send('youtube-auth-success');
+    }
     return oauth2Client;
   } catch (err) {
     return getNewToken(oauth2Client, event, ipcMain);
@@ -83,7 +87,7 @@ function getNewToken(oAuth2Client, event, ipcMain) {
 
     // Wait for the code from the renderer
     const codeListener = (authEvent, code) => {
-      ipcMain.removeListener('youtube-auth-code', codeListener);
+      ipcMain.removeListener('youtube-auth-code-internal', codeListener);
       
       oAuth2Client.getToken(code, async (err, token) => {
         if (err) {
@@ -112,7 +116,7 @@ function getNewToken(oAuth2Client, event, ipcMain) {
     };
 
     // Set up listener for auth code
-    ipcMain.once('youtube-auth-code', codeListener);
+    ipcMain.once('youtube-auth-code-internal', codeListener);
   });
 }
 
@@ -189,6 +193,9 @@ async function uploadVideo(videoPath, metadata, progressCallback, ipcMain) {
 
   const youtube = google.youtube({ version: 'v3', auth: oauth2Client });
 
+  const wantsSchedule = Boolean(metadata && metadata.publishAt);
+  const effectivePrivacyStatus = wantsSchedule ? 'private' : (metadata.privacyStatus || 'private');
+
   const requestParameters = {
     part: 'snippet,status',
     requestBody: {
@@ -199,13 +206,18 @@ async function uploadVideo(videoPath, metadata, progressCallback, ipcMain) {
         categoryId: metadata.categoryId || '22', // People & Blogs
       },
       status: {
-        privacyStatus: metadata.privacyStatus || 'private', // private, unlisted, public
+        privacyStatus: effectivePrivacyStatus, // private, unlisted, public
       },
     },
     media: {
       body: fs.createReadStream(videoPath),
     },
   };
+
+  // Scheduled publish time (RFC3339). YouTube requires privacyStatus=private when setting publishAt.
+  if (wantsSchedule) {
+    requestParameters.requestBody.status.publishAt = metadata.publishAt;
+  }
 
   return new Promise((resolve, reject) => {
     youtube.videos.insert(
@@ -226,6 +238,7 @@ async function uploadVideo(videoPath, metadata, progressCallback, ipcMain) {
             videoId: response.data.id,
             url: `https://www.youtube.com/watch?v=${response.data.id}`,
             title: response.data.snippet.title,
+            scheduledPublishAt: wantsSchedule ? metadata.publishAt : null,
           });
         }
       }
@@ -249,6 +262,21 @@ async function revokeToken() {
   }
 }
 
+/**
+ * Reset local OAuth state (delete stored token and credentials).
+ * Useful when user saved wrong Client ID/Secret and needs a clean restart.
+ */
+async function resetAuth() {
+  try {
+    await fsPromises.unlink(TOKEN_PATH).catch(() => {});
+    await fsPromises.unlink(CREDENTIALS_PATH).catch(() => {});
+    oauth2Client = null;
+    return true;
+  } catch (error) {
+    throw new Error(`Failed to reset auth: ${error.message}`);
+  }
+}
+
 module.exports = {
   authorize,
   saveCredentials,
@@ -256,6 +284,7 @@ module.exports = {
   isAuthenticated,
   uploadVideo,
   revokeToken,
+  resetAuth,
   getNewToken,
 };
 

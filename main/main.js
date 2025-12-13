@@ -20,7 +20,7 @@ let currentPanZoomGeneration = {
 
 // OAuth callback server
 let oauthCallbackServer = null;
-let oauthCodeResolver = null;
+let youtubeAuthWebContents = null;
 
 // Helper: Parse subtitle file (SRT or VTT)
 function parseSubtitleFile(content, format) {
@@ -446,10 +446,9 @@ function registerIpcHandlers() {
               </body>
             </html>
           `);
-          
-          if (oauthCodeResolver) {
-            oauthCodeResolver.reject(new Error(errorDescription));
-            oauthCodeResolver = null;
+
+          if (youtubeAuthWebContents && !youtubeAuthWebContents.isDestroyed()) {
+            youtubeAuthWebContents.send('youtube-error', errorDescription);
           }
           stopOAuthCallbackServer();
           return;
@@ -468,10 +467,9 @@ function registerIpcHandlers() {
             </html>
           `);
 
-          // Send code to the OAuth handler
-          if (oauthCodeResolver) {
-            oauthCodeResolver.resolve(code);
-            oauthCodeResolver = null;
+          // Forward code to the internal auth-code channel used by youtubeUploader
+          if (youtubeAuthWebContents && !youtubeAuthWebContents.isDestroyed()) {
+            ipcMain.emit('youtube-auth-code-internal', { sender: youtubeAuthWebContents }, code);
           }
           
           // Stop server after a short delay
@@ -525,10 +523,23 @@ function registerIpcHandlers() {
   // Authenticate with YouTube
   ipcMain.on('youtube-authenticate', async (event) => {
     try {
+      youtubeAuthWebContents = event.sender;
       const credentials = await youtubeUploader.loadCredentials();
       if (!credentials) {
         event.sender.send('youtube-error', 'No credentials found. Please set up OAuth credentials first.');
         return;
+      }
+
+      // If we already have a valid token, treat this as a successful auth and don't re-run the flow.
+      // This prevents the UI from feeling like "Authenticate" does nothing when a token already exists.
+      try {
+        const alreadyAuthed = await youtubeUploader.isAuthenticated();
+        if (alreadyAuthed) {
+          event.sender.send('youtube-auth-success');
+          return;
+        }
+      } catch (_) {
+        // continue with interactive auth
       }
 
       // Try to start the callback server
@@ -541,32 +552,21 @@ function registerIpcHandlers() {
         event.sender.send('youtube-callback-server-failed', serverError.message);
       }
 
-      // Set up code resolver
-      oauthCodeResolver = {
-        resolve: (code) => {
-          // Send code via IPC
-          ipcMain.emit('youtube-auth-code', event, code);
-        },
-        reject: (error) => {
-          event.sender.send('youtube-error', error.message);
-        }
-      };
-
       await youtubeUploader.authorize(credentials, event, ipcMain);
     } catch (error) {
       stopOAuthCallbackServer();
       if (error.message && !error.message.includes('youtube-auth-code')) {
         event.sender.send('youtube-error', error.message);
       }
+    } finally {
+      // Clear reference once flow is done/failed to avoid sending to stale webContents
+      youtubeAuthWebContents = null;
     }
   });
 
-  // Handle auth code from OAuth callback (manual entry fallback)
+  // Handle auth code from renderer paste (manual entry fallback)
   ipcMain.on('youtube-auth-code', (event, code) => {
-    if (oauthCodeResolver && oauthCodeResolver.resolve) {
-      oauthCodeResolver.resolve(code);
-      oauthCodeResolver = null;
-    }
+    ipcMain.emit('youtube-auth-code-internal', event, code);
   });
 
   // Upload video to YouTube
@@ -590,6 +590,16 @@ function registerIpcHandlers() {
       return { success: true };
     } catch (error) {
       throw new Error(`Failed to revoke token: ${error.message}`);
+    }
+  });
+
+  // Reset OAuth (delete saved token + credentials)
+  ipcMain.handle('youtube-reset-auth', async () => {
+    try {
+      await youtubeUploader.resetAuth();
+      return { success: true };
+    } catch (error) {
+      throw new Error(`Failed to reset auth: ${error.message}`);
     }
   });
 

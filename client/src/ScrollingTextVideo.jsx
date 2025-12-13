@@ -79,6 +79,8 @@ function ScrollingTextVideo() {
   const [youtubeTags, setYoutubeTags] = useState('');
   const [youtubePrivacy, setYoutubePrivacy] = useState('private');
   const [youtubeCategory, setYoutubeCategory] = useState('22');
+  const [youtubeScheduleEnabled, setYoutubeScheduleEnabled] = useState(false);
+  const [youtubePublishAtLocal, setYoutubePublishAtLocal] = useState(''); // datetime-local (local time)
   const [isYoutubeUploading, setIsYoutubeUploading] = useState(false);
   const [youtubeUploadProgress, setYoutubeUploadProgress] = useState(0);
   const [youtubeUploadMessage, setYoutubeUploadMessage] = useState('');
@@ -224,13 +226,40 @@ function ScrollingTextVideo() {
     window.electronAPI.onYoutubeUploadSuccess((result) => {
       setIsYoutubeUploading(false);
       setYoutubeUploadProgress(100);
-      setStatus(`✅ Video uploaded successfully! URL: ${result.url}`);
+      if (result && result.scheduledPublishAt) {
+        const localTime = new Date(result.scheduledPublishAt).toLocaleString();
+        setStatus(`✅ Video uploaded and scheduled to publish at ${localTime}. URL: ${result.url}`);
+      } else {
+        setStatus(`✅ Video uploaded successfully! URL: ${result.url}`);
+      }
       setYoutubeUploadMessage('');
     });
 
     window.electronAPI.onYoutubeUploadError((error) => {
       setIsYoutubeUploading(false);
-      setStatus(`❌ Upload failed: ${error}`);
+      const errStr = String(error || '');
+      let errorMessage = `❌ Upload failed: ${errStr}`;
+
+      // Add actionable troubleshooting for common OAuth errors
+      if (errStr.includes('invalid_client')) {
+        errorMessage += '\n\n💡 Fix "invalid_client":\n';
+        errorMessage += '1. In Google Cloud Console, create OAuth Client ID of type "Desktop app"\n';
+        errorMessage += '2. Copy the correct Client ID + Client Secret into the app (no extra spaces)\n';
+        errorMessage += '3. Enable "YouTube Data API v3" for the same project\n';
+        errorMessage += '4. Configure OAuth consent screen (and add yourself as a Test User if in Testing)\n';
+        errorMessage += '5. Click "Reset OAuth" in the app, then authenticate again\n';
+        errorMessage += '\nNote: Do not use "Web application" credentials for this flow.';
+      } else if (errStr.includes('invalid_grant')) {
+        errorMessage += '\n\n💡 Fix "invalid_grant":\n';
+        errorMessage += '1. Re-authenticate and paste a fresh code (codes expire quickly)\n';
+        errorMessage += '2. Click "Reset OAuth" if it keeps happening\n';
+      } else if (errStr.includes('401')) {
+        errorMessage += '\n\n💡 Fix "401":\n';
+        errorMessage += '1. Click "Reset OAuth" and authenticate again\n';
+        errorMessage += '2. Verify your OAuth consent screen + Test User settings\n';
+      }
+
+      setStatus(errorMessage);
       setYoutubeUploadMessage('');
     });
 
@@ -355,6 +384,52 @@ function ScrollingTextVideo() {
     }
   };
 
+  const handleYoutubeResetAuth = async () => {
+    const ok = window.confirm('This will delete the saved YouTube token + credentials on this computer. Continue?');
+    if (!ok) return;
+    try {
+      await window.electronAPI.youtubeResetAuth();
+      setYoutubeAuthenticated(false);
+      setShowCredentialsForm(false);
+      setShowAuthCodeInput(false);
+      setYoutubeAuthCode('');
+      setYoutubeCredentials({ clientId: '', clientSecret: '', redirectUri: '' });
+      setStatus('✅ OAuth reset. Please set up credentials again, then authenticate.');
+    } catch (error) {
+      setStatus(`❌ Failed to reset OAuth: ${error.message}`);
+    }
+  };
+
+  const parseDatetimeLocalToDate = (value) => {
+    // value format: "YYYY-MM-DDTHH:mm" (or with seconds depending on browser)
+    if (!value) return null;
+    const [datePart, timePartRaw] = value.split('T');
+    if (!datePart || !timePartRaw) return null;
+    const [yearStr, monthStr, dayStr] = datePart.split('-');
+    const timePart = timePartRaw.split('.')[0]; // drop ms if present
+    const [hourStr, minuteStr, secondStr] = timePart.split(':');
+    const year = Number(yearStr);
+    const month = Number(monthStr);
+    const day = Number(dayStr);
+    const hour = Number(hourStr);
+    const minute = Number(minuteStr);
+    const second = Number(secondStr || '0');
+
+    if (
+      Number.isNaN(year) ||
+      Number.isNaN(month) ||
+      Number.isNaN(day) ||
+      Number.isNaN(hour) ||
+      Number.isNaN(minute) ||
+      Number.isNaN(second)
+    ) {
+      return null;
+    }
+
+    // Construct as local time explicitly
+    return new Date(year, month - 1, day, hour, minute, second, 0);
+  };
+
   const handleYoutubeUpload = () => {
     if (!youtubeVideoPath) {
       setStatus('❌ Please select a video file');
@@ -369,10 +444,35 @@ function ScrollingTextVideo() {
       return;
     }
 
+    let publishAtIso = null;
+    let effectivePrivacy = youtubePrivacy;
+    if (youtubeScheduleEnabled) {
+      const publishDate = parseDatetimeLocalToDate(youtubePublishAtLocal);
+      if (!publishDate) {
+        setStatus('❌ Please choose a valid schedule date/time');
+        return;
+      }
+      const msUntil = publishDate.getTime() - Date.now();
+      if (Number.isNaN(msUntil) || msUntil < 60 * 1000) {
+        setStatus('❌ Scheduled publish time must be at least 1 minute in the future');
+        return;
+      }
+      publishAtIso = publishDate.toISOString();
+
+      // YouTube requires privacyStatus=private when setting publishAt
+      if (effectivePrivacy !== 'private') {
+        effectivePrivacy = 'private';
+      }
+    }
+
     setIsYoutubeUploading(true);
     setYoutubeUploadProgress(0);
     setYoutubeUploadMessage('Preparing upload...');
-    setStatus('📤 Starting upload...');
+    if (youtubeScheduleEnabled) {
+      setStatus('📤 Uploading now and scheduling publish on YouTube...');
+    } else {
+      setStatus('📤 Starting upload...');
+    }
 
     const tags = youtubeTags.split(',').map(tag => tag.trim()).filter(tag => tag.length > 0);
 
@@ -380,9 +480,12 @@ function ScrollingTextVideo() {
       title: youtubeTitle,
       description: youtubeDescription,
       tags: tags,
-      privacyStatus: youtubePrivacy,
+      privacyStatus: effectivePrivacy,
       categoryId: youtubeCategory,
     };
+    if (publishAtIso) {
+      metadata.publishAt = publishAtIso;
+    }
 
     window.electronAPI.youtubeUploadVideo(youtubeVideoPath, metadata);
   };
@@ -1779,6 +1882,14 @@ function ScrollingTextVideo() {
                     >
                       {showCredentialsForm ? '❌ Cancel' : '⚙️ Setup Credentials'}
                     </button>
+                    <button
+                      onClick={handleYoutubeResetAuth}
+                      className="small-btn"
+                      style={{ marginRight: '10px', backgroundColor: '#6c757d' }}
+                      disabled={isYoutubeUploading}
+                    >
+                      🧹 Reset OAuth
+                    </button>
                     {!showCredentialsForm && !showAuthCodeInput && (
                       <button onClick={handleYoutubeAuthenticate} className="small-btn" style={{ backgroundColor: '#28a745' }}>
                         🔑 Authenticate
@@ -1971,10 +2082,50 @@ function ScrollingTextVideo() {
               </div>
             </div>
 
+            {/* Scheduling */}
+            <div className="form-group" style={{ marginTop: '10px', padding: '12px', backgroundColor: '#f5f5f5', borderRadius: '8px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: youtubeScheduleEnabled ? '10px' : 0 }}>
+                <input
+                  id="youtubeScheduleEnabled"
+                  type="checkbox"
+                  checked={youtubeScheduleEnabled}
+                  onChange={(e) => setYoutubeScheduleEnabled(e.target.checked)}
+                  disabled={isYoutubeUploading}
+                />
+                <label htmlFor="youtubeScheduleEnabled" style={{ margin: 0 }}>
+                  Schedule publish (upload now, publish later)
+                </label>
+              </div>
+
+              {youtubeScheduleEnabled && (
+                <>
+                  <div className="form-group" style={{ marginBottom: '8px' }}>
+                    <label>Publish Date & Time (your local time)</label>
+                    <input
+                      type="datetime-local"
+                      value={youtubePublishAtLocal}
+                      onChange={(e) => setYoutubePublishAtLocal(e.target.value)}
+                      disabled={isYoutubeUploading}
+                      style={{ width: '100%', padding: '8px' }}
+                    />
+                  </div>
+                  <small style={{ color: '#666', fontSize: '11px' }}>
+                    Scheduling requires the video to be <strong>Private</strong>. If you selected Public/Unlisted, the app will still upload as Private and schedule publishing.
+                  </small>
+                </>
+              )}
+            </div>
+
             {/* Upload Button */}
             <button
               onClick={handleYoutubeUpload}
-              disabled={isYoutubeUploading || !youtubeAuthenticated || !youtubeVideoPath || !youtubeTitle.trim()}
+              disabled={
+                isYoutubeUploading ||
+                !youtubeAuthenticated ||
+                !youtubeVideoPath ||
+                !youtubeTitle.trim() ||
+                (youtubeScheduleEnabled && !youtubePublishAtLocal)
+              }
               className="generate-button"
               style={{ marginTop: '20px' }}
             >

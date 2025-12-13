@@ -75,6 +75,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   youtubeAuthenticate: () => ipcRenderer.send('youtube-authenticate'),
   youtubeUploadVideo: (videoPath, metadata) => ipcRenderer.send('youtube-upload-video', { videoPath, metadata }),
   youtubeRevokeToken: () => ipcRenderer.invoke('youtube-revoke-token'),
+  youtubeResetAuth: () => ipcRenderer.invoke('youtube-reset-auth'),
   youtubeOpenUrl: (url) => ipcRenderer.invoke('youtube-open-url', url),
   youtubeSendAuthCode: (code) => ipcRenderer.send('youtube-auth-code', code),
 
