@@ -91,6 +91,7 @@ function ScrollingTextVideo() {
   // Pan/Zoom Video Generator state
   const [panZoomImageFolder, setPanZoomImageFolder] = useState('');
   const [panZoomOutputFolder, setPanZoomOutputFolder] = useState('');
+  const [panZoomSocialPreset, setPanZoomSocialPreset] = useState('custom');
   const [panZoomVideoWidth, setPanZoomVideoWidth] = useState(720);
   const [panZoomVideoHeight, setPanZoomVideoHeight] = useState(1280);
   const [panZoomFps, setPanZoomFps] = useState(24);
@@ -100,6 +101,7 @@ function ScrollingTextVideo() {
   const [panZoomShakeMagnitude, setPanZoomShakeMagnitude] = useState(3);
   const [panZoomZoomMagnitude, setPanZoomZoomMagnitude] = useState(0.05);
   const [panZoomPanMagnitude, setPanZoomPanMagnitude] = useState(30);
+  const [panZoomBackgroundMusic, setPanZoomBackgroundMusic] = useState({ enabled: false, path: '', volume: 0.5, fadeIn: 0, fadeOut: 0 });
   const [isPanZoomGenerating, setIsPanZoomGenerating] = useState(false);
   const [panZoomProgress, setPanZoomProgress] = useState(0);
   const [panZoomProgressMessage, setPanZoomProgressMessage] = useState('');
@@ -460,6 +462,14 @@ function ScrollingTextVideo() {
     }
   };
 
+  const handleSelectPanZoomAudio = async () => {
+    const path = await window.electronAPI.selectAudio();
+    if (path) {
+      setPanZoomBackgroundMusic(prev => ({ ...prev, path, enabled: true }));
+      setStatus('');
+    }
+  };
+
   const handleGeneratePanZoomVideo = () => {
     if (!panZoomImageFolder) {
       setStatus('❌ Please select an image folder');
@@ -488,6 +498,7 @@ function ScrollingTextVideo() {
       shakeMagnitude: parseFloat(panZoomShakeMagnitude),
       zoomMagnitude: parseFloat(panZoomZoomMagnitude),
       panMagnitude: parseFloat(panZoomPanMagnitude),
+      backgroundMusic: panZoomBackgroundMusic.enabled && panZoomBackgroundMusic.path ? panZoomBackgroundMusic : null,
     };
 
     window.electronAPI.generatePanZoomVideo(options);
@@ -499,6 +510,25 @@ function ScrollingTextVideo() {
     setPanZoomProgress(0);
     setPanZoomProgressMessage('');
     setStatus('⚠️ Video generation cancelled');
+  };
+
+  const handlePanZoomSocialPreset = (preset) => {
+    setPanZoomSocialPreset(preset);
+    const presets = {
+      instagram: { width: 1080, height: 1080 },
+      'instagram-story': { width: 1080, height: 1920 },
+      'instagram-reel': { width: 1080, height: 1920 },
+      tiktok: { width: 1080, height: 1920 },
+      'youtube-shorts': { width: 1080, height: 1920 },
+      youtube: { width: 1920, height: 1080 },
+      facebook: { width: 1280, height: 720 },
+      twitter: { width: 1280, height: 720 },
+      custom: { width: 720, height: 1280 },
+    };
+    if (presets[preset]) {
+      setPanZoomVideoWidth(presets[preset].width);
+      setPanZoomVideoHeight(presets[preset].height);
+    }
   };
 
   const handleSocialPreset = (preset) => {
@@ -1496,6 +1526,22 @@ function ScrollingTextVideo() {
               </div>
             </div>
 
+            {/* Social Media Preset */}
+            <div className="form-group">
+              <label>Social Media Preset</label>
+              <select
+                value={panZoomSocialPreset}
+                onChange={(e) => handlePanZoomSocialPreset(e.target.value)}
+                disabled={isPanZoomGenerating}
+              >
+                {socialPresets.map((preset) => (
+                  <option key={preset.value} value={preset.value}>
+                    {preset.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+
             {/* Video Settings */}
             <div className="form-row-four">
               <div className="form-group">
@@ -1608,6 +1654,66 @@ function ScrollingTextVideo() {
                 <small style={{ color: '#666', fontSize: '11px' }}>Maximum pan distance (pixels)</small>
               </div>
             </div>
+
+            {/* Audio Settings */}
+            <div className="form-group">
+              <label>Background Music</label>
+              <button onClick={handleSelectPanZoomAudio} disabled={isPanZoomGenerating} className="audio-control-btn">
+                🎵 Select Audio File
+              </button>
+              {panZoomBackgroundMusic.path && (
+                <p className="file-info">Selected: {panZoomBackgroundMusic.path.split(/[/\\]/).pop()}</p>
+              )}
+            </div>
+
+            {panZoomBackgroundMusic.enabled && panZoomBackgroundMusic.path && (
+              <div className="form-row">
+                <div className="form-group">
+                  <label>Volume (0-1)</label>
+                  <input
+                    type="range"
+                    min="0"
+                    max="1"
+                    step="0.1"
+                    value={panZoomBackgroundMusic.volume}
+                    onChange={(e) => setPanZoomBackgroundMusic(prev => ({
+                      ...prev,
+                      volume: parseFloat(e.target.value)
+                    }))}
+                    disabled={isPanZoomGenerating}
+                  />
+                  <span>{Math.round(panZoomBackgroundMusic.volume * 100)}%</span>
+                </div>
+                <div className="form-group">
+                  <label>Fade In (seconds)</label>
+                  <input
+                    type="number"
+                    value={panZoomBackgroundMusic.fadeIn}
+                    onChange={(e) => setPanZoomBackgroundMusic(prev => ({
+                      ...prev,
+                      fadeIn: parseFloat(e.target.value)
+                    }))}
+                    min="0"
+                    step="0.5"
+                    disabled={isPanZoomGenerating}
+                  />
+                </div>
+                <div className="form-group">
+                  <label>Fade Out (seconds)</label>
+                  <input
+                    type="number"
+                    value={panZoomBackgroundMusic.fadeOut}
+                    onChange={(e) => setPanZoomBackgroundMusic(prev => ({
+                      ...prev,
+                      fadeOut: parseFloat(e.target.value)
+                    }))}
+                    min="0"
+                    step="0.5"
+                    disabled={isPanZoomGenerating}
+                  />
+                </div>
+              </div>
+            )}
 
             {/* Generate Button */}
             <button

@@ -6,6 +6,9 @@ const ffmpeg = require('fluent-ffmpeg');
 const ffmpegPath = require('ffmpeg-static');
 const { app } = require('electron');
 
+// Import ffprobe for getting video duration
+ffmpeg.setFfprobePath(ffmpegPath.replace('ffmpeg', 'ffprobe'));
+
 ffmpeg.setFfmpegPath(ffmpegPath);
 
 /**
@@ -25,6 +28,7 @@ async function generatePanZoomVideo(options, progressCallback, shouldCancel) {
     shakeMagnitude = 3,
     zoomMagnitude = 0.05,
     panMagnitude = 30,
+    backgroundMusic = null,
   } = options;
 
   // Validate inputs
@@ -85,6 +89,7 @@ async function generatePanZoomVideo(options, progressCallback, shouldCancel) {
       shakeMagnitude,
       zoomMagnitude,
       panMagnitude,
+      backgroundMusic,
       progressCallback,
       shouldCancel
     );
@@ -111,6 +116,7 @@ async function createVideoFromImages(
   shakeMagnitude,
   zoomMagnitude,
   panMagnitude,
+  backgroundMusic,
   progressCallback,
   shouldCancel
 ) {
@@ -210,7 +216,7 @@ async function createVideoFromImages(
       }
     }
 
-    // Encode video from JPEG frames
+    // Encode video from JPEG frames (without audio first)
     if (progressCallback) {
       progressCallback({
         type: 'encoding',
@@ -219,7 +225,38 @@ async function createVideoFromImages(
       });
     }
 
-    await encodeVideo(tempDir, outputPath, fps, frameIndex);
+    const videoWithoutAudio = path.join(tempDir, 'video-no-audio.mp4');
+    await encodeVideo(tempDir, videoWithoutAudio, fps, frameIndex);
+
+    // Mix audio if background music is provided
+    let finalVideoPath = videoWithoutAudio;
+    if (backgroundMusic && backgroundMusic.path) {
+      if (progressCallback) {
+        progressCallback({
+          type: 'audio-mix',
+          progress: 95,
+          message: 'Mixing audio with video...',
+        });
+      }
+
+      finalVideoPath = outputPath;
+      await mixAudioWithVideo(
+        videoWithoutAudio,
+        backgroundMusic.path,
+        backgroundMusic.volume || 0.5,
+        backgroundMusic.fadeIn || 0,
+        backgroundMusic.fadeOut || 0,
+        finalVideoPath,
+        progressCallback
+      );
+      
+      // Clean up temporary video file
+      await fs.unlink(videoWithoutAudio).catch(() => {});
+    } else {
+      // No audio, just move the video to final location
+      await fs.copyFile(videoWithoutAudio, outputPath);
+      await fs.unlink(videoWithoutAudio).catch(() => {});
+    }
 
     // Verify video file was created
     try {
@@ -428,6 +465,124 @@ async function encodeVideo(tempDir, outputPath, fps, totalFrames) {
       });
 
     command.run();
+  });
+}
+
+/**
+ * Mix audio with video using FFmpeg
+ */
+async function mixAudioWithVideo(
+  videoPath,
+  audioPath,
+  volume,
+  fadeIn,
+  fadeOut,
+  outputPath,
+  progressCallback
+) {
+  return new Promise((resolve, reject) => {
+    // Get video duration for fade out timing
+    const getVideoDuration = () => {
+      return new Promise((resolveDuration, rejectDuration) => {
+        ffmpeg.ffprobe(videoPath, (err, metadata) => {
+          if (err) {
+            rejectDuration(err);
+          } else {
+            resolveDuration(metadata.format.duration || 0);
+          }
+        });
+      });
+    };
+
+    getVideoDuration().then((videoDuration) => {
+      const command = ffmpeg()
+        .input(videoPath)
+        .input(audioPath);
+
+      let audioFilters = [];
+      let musicFilter = '[1:a]';
+
+      // Apply volume if needed
+      if (volume !== 1) {
+        musicFilter += `volume=${volume}`;
+      }
+
+      // Apply fade in
+      if (fadeIn > 0) {
+        if (musicFilter !== '[1:a]') musicFilter += ',';
+        musicFilter += `afade=t=in:st=0:d=${fadeIn}`;
+      }
+
+      // Apply fade out
+      if (fadeOut > 0 && videoDuration > 0) {
+        const fadeOutStart = Math.max(0, videoDuration - fadeOut);
+        if (musicFilter !== '[1:a]' && !musicFilter.includes('afade')) musicFilter += ',';
+        musicFilter += `afade=t=out:st=${fadeOutStart}:d=${fadeOut}`;
+      }
+
+      musicFilter += '[aout]';
+      audioFilters.push(musicFilter);
+
+      command
+        .complexFilter(audioFilters)
+        .outputOptions([
+          '-map', '0:v:0',
+          '-map', '[aout]',
+          '-c:v', 'copy',
+          '-c:a', 'aac',
+          '-b:a', '192k',
+          '-shortest',
+          '-y',
+        ])
+        .output(outputPath)
+        .on('end', () => {
+          resolve();
+        })
+        .on('error', (err) => {
+          reject(new Error(`FFmpeg audio mix error: ${err.message}`));
+        })
+        .run();
+    }).catch((err) => {
+      // If duration detection fails, proceed without fade out
+      const command = ffmpeg()
+        .input(videoPath)
+        .input(audioPath);
+
+      let audioFilters = [];
+      let musicFilter = '[1:a]';
+
+      if (volume !== 1) {
+        musicFilter += `volume=${volume}`;
+      }
+
+      if (fadeIn > 0) {
+        if (musicFilter !== '[1:a]') musicFilter += ',';
+        musicFilter += `afade=t=in:st=0:d=${fadeIn}`;
+      }
+
+      musicFilter += '[aout]';
+      audioFilters.push(musicFilter);
+
+      command
+        .complexFilter(audioFilters)
+        .outputOptions([
+          '-map', '0:v:0',
+          '-map', '[aout]',
+          '-c:v', 'copy',
+          '-c:a', 'aac',
+          '-b:a', '192k',
+          '-shortest',
+          '-y',
+        ])
+        .output(outputPath)
+        .on('end', () => {
+          resolve();
+        })
+        .on('error', (err) => {
+          reject(new Error(`FFmpeg audio mix error: ${err.message}`));
+        })
+        .run();
+    });
   });
 }
 
