@@ -137,12 +137,24 @@ async function createVideoFromImages(
       const imgWidth = image.width;
       const imgHeight = image.height;
 
-      // Calculate base scale
+      // Calculate base scale to fit image to video dimensions
       const baseScaleX = videoWidth / imgWidth;
       const baseScaleY = videoHeight / imgHeight;
       const baseScale = Math.max(baseScaleX, baseScaleY);
-      const maxZoom = 1 + zoomMagnitude;
-      const scale = baseScale * maxZoom * 1.2;
+      
+      // Add extra room for zoom and pan effects
+      // The zoom oscillates from 1 (no zoom) to 1+zoomMagnitude (max zoom)
+      // Problem: At zoom=1, we want image to fit video (or be slightly larger)
+      // Current: scale = baseScale * (1 + zoomMagnitude + panPadding)
+      // At zoom=1: currentScaledWidth = scaledWidth * 1 = imgWidth * baseScale * (1 + zoomMagnitude + panPadding)
+      // This is too large!
+      //
+      // Fix: Reduce the scale multiplier so at zoom=1, image fits better
+      // Convert pan magnitude to scale factor (pan pixels relative to video size)
+      const panPadding = Math.max(panMagnitude * 2 / Math.min(videoWidth, videoHeight), 0.05);
+      // Use smaller multiplier: at zoom=1, image will be baseScale * (1 + small padding)
+      // At zoom=1+zoomMagnitude, it will zoom in
+      const scale = baseScale * (1 + panPadding * 0.3 + zoomMagnitude * 0.2);
 
       const scaledWidth = imgWidth * scale;
       const scaledHeight = imgHeight * scale;
@@ -162,21 +174,33 @@ async function createVideoFromImages(
         // Generate frame asynchronously
         const framePromise = (async () => {
           // Calculate effects
+          // Zoom oscillates from 1 (no zoom) to 1+zoomMagnitude (max zoom)
           const zoom = 1 + zoomMagnitude * Math.sin(2 * Math.PI * t / imageDuration);
           const panX = panMagnitude * Math.sin(2 * Math.PI * t / imageDuration);
           const panY = panMagnitude * Math.cos(2 * Math.PI * t / imageDuration);
           const shakeX = (Math.random() * 2 - 1) * shakeMagnitude;
           const shakeY = (Math.random() * 2 - 1) * shakeMagnitude;
 
+          // Apply zoom to the scaled dimensions
           const currentScaledWidth = scaledWidth * zoom;
           const currentScaledHeight = scaledHeight * zoom;
+          
+          // Calculate center position of the zoomed image
           const centerX = currentScaledWidth / 2;
           const centerY = currentScaledHeight / 2;
+          
+          // Calculate offset from center (pan + shake)
           const offsetX = panX + shakeX;
           const offsetY = panY + shakeY;
           
-          const x1 = Math.max(0, Math.min(centerX - videoWidth / 2 + offsetX, currentScaledWidth - videoWidth));
-          const y1 = Math.max(0, Math.min(centerY - videoHeight / 2 + offsetY, currentScaledHeight - videoHeight));
+          // Calculate crop position (top-left corner of visible area)
+          // Start from center, then offset by pan/shake
+          const cropX = centerX - videoWidth / 2 + offsetX;
+          const cropY = centerY - videoHeight / 2 + offsetY;
+          
+          // Clamp to ensure we don't go outside image bounds
+          const x1 = Math.max(0, Math.min(cropX, currentScaledWidth - videoWidth));
+          const y1 = Math.max(0, Math.min(cropY, currentScaledHeight - videoHeight));
 
           // Create canvas and draw
           const canvas = new Canvas(videoWidth, videoHeight);
