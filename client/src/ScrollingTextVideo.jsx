@@ -3,6 +3,8 @@ import './ScrollingTextVideo.css';
 
 function ScrollingTextVideo() {
   const YT_SELECTED_PROFILE_KEY = 'slideshow-generator.youtube.selectedProfileId';
+  const YT_DEFAULT_PRIVACY = 'private';
+  const YT_DEFAULT_CATEGORY_ID = '22';
 
   // Basic state
   const [imagePath, setImagePath] = useState('');
@@ -77,23 +79,22 @@ function ScrollingTextVideo() {
   // YouTube Upload state
   const [youtubeProfiles, setYoutubeProfiles] = useState([]);
   const [selectedYoutubeProfileId, setSelectedYoutubeProfileId] = useState('');
-  const [youtubeVideoPath, setYoutubeVideoPath] = useState('');
-  const [youtubeTitle, setYoutubeTitle] = useState('');
-  const [youtubeDescription, setYoutubeDescription] = useState('');
-  const [youtubeTags, setYoutubeTags] = useState('');
-  const [youtubePrivacy, setYoutubePrivacy] = useState('private');
-  const [youtubeCategory, setYoutubeCategory] = useState('22');
-  const [youtubeScheduleEnabled, setYoutubeScheduleEnabled] = useState(false);
-  const [youtubePublishAtLocal, setYoutubePublishAtLocal] = useState(''); // datetime-local (local time)
-  const [isYoutubeUploading, setIsYoutubeUploading] = useState(false);
-  const [youtubeUploadProgress, setYoutubeUploadProgress] = useState(0);
-  const [youtubeUploadMessage, setYoutubeUploadMessage] = useState('');
   const [youtubeAuthenticated, setYoutubeAuthenticated] = useState(false);
   const [youtubeProfileLabel, setYoutubeProfileLabel] = useState('');
   const [youtubeCredentials, setYoutubeCredentials] = useState({ clientId: '', clientSecret: '', redirectUri: '' });
   const [showCredentialsForm, setShowCredentialsForm] = useState(false);
   const [youtubeAuthCode, setYoutubeAuthCode] = useState('');
   const [showAuthCodeInput, setShowAuthCodeInput] = useState(false);
+  const [youtubeBatchItems, setYoutubeBatchItems] = useState([]); // {id, path, title, description, tags, privacyStatus, categoryId, status, progress, message, result, error}
+  const [editingBatchItemId, setEditingBatchItemId] = useState('');
+  const [editingBatchForm, setEditingBatchForm] = useState({
+    title: '',
+    description: '',
+    tags: '',
+    privacyStatus: YT_DEFAULT_PRIVACY,
+    scheduleEnabled: false,
+    publishAtLocal: '',
+  });
 
   // Avoid stale state inside long-lived IPC listeners
   const selectedYoutubeProfileIdRef = useRef('');
@@ -260,24 +261,51 @@ function ScrollingTextVideo() {
     });
 
     window.electronAPI.onYoutubeUploadProgress((progressData) => {
-      setYoutubeUploadProgress(progressData.progress || 0);
-      setYoutubeUploadMessage(progressData.message || 'Uploading...');
+      // Batch upload UI only (single uploader removed)
+      if (progressData && progressData.uploadId) {
+        const id = progressData.uploadId;
+        setYoutubeBatchItems((prev) =>
+          prev.map((item) =>
+            item.id === id
+              ? {
+                  ...item,
+                  status: 'uploading',
+                  progress: typeof progressData.progress === 'number' ? progressData.progress : item.progress,
+                  message: progressData.message || item.message,
+                }
+              : item
+          )
+        );
+      }
     });
 
     window.electronAPI.onYoutubeUploadSuccess((result) => {
-      setIsYoutubeUploading(false);
-      setYoutubeUploadProgress(100);
-      if (result && result.scheduledPublishAt) {
-        const localTime = new Date(result.scheduledPublishAt).toLocaleString();
-        setStatus(`✅ Video uploaded and scheduled to publish at ${localTime}. URL: ${result.url}`);
-      } else {
-        setStatus(`✅ Video uploaded successfully! URL: ${result.url}`);
+      // Batch success only (single uploader removed)
+      if (result && result.uploadId) {
+        const id = result.uploadId;
+        setYoutubeBatchItems((prev) =>
+          prev.map((item) =>
+            item.id === id
+              ? { ...item, status: 'done', progress: 100, message: '', result, error: '' }
+              : item
+          )
+        );
+        setStatus(`✅ Uploaded: ${result.url || 'Success'}`);
+        return;
       }
-      setYoutubeUploadMessage('');
     });
 
     window.electronAPI.onYoutubeUploadError((error) => {
-      setIsYoutubeUploading(false);
+      // Batch error
+      if (error && typeof error === 'object' && error.uploadId) {
+        const id = error.uploadId;
+        const errStr = String(error.error || error.message || 'Upload failed');
+        setYoutubeBatchItems((prev) =>
+          prev.map((item) => (item.id === id ? { ...item, status: 'error', error: errStr, message: '' } : item))
+        );
+        setStatus(`❌ Upload failed: ${errStr}`);
+        return;
+      }
       const errStr = String(error || '');
       let errorMessage = `❌ Upload failed: ${errStr}`;
 
@@ -301,7 +329,6 @@ function ScrollingTextVideo() {
       }
 
       setStatus(errorMessage);
-      setYoutubeUploadMessage('');
     });
 
     window.electronAPI.onYoutubeError((error) => {
@@ -380,17 +407,147 @@ function ScrollingTextVideo() {
     await checkYoutubeAuth(profileId);
   };
 
-  const handleSelectYoutubeVideo = async () => {
-    const path = await window.electronAPI.selectVideo();
-    if (path) {
-      setYoutubeVideoPath(path);
-      // Auto-fill title from filename if title is empty
-      if (!youtubeTitle) {
-        const filename = path.split(/[/\\]/).pop().replace(/\.[^/.]+$/, '');
-        setYoutubeTitle(filename);
+  const handleSelectYoutubeVideosBatch = async () => {
+    const paths = await window.electronAPI.selectVideos();
+    if (!paths || paths.length === 0) return;
+
+    const newItems = paths.map((p) => {
+      const filename = p.split(/[/\\]/).pop();
+      const title = filename ? filename.replace(/\.[^/.]+$/, '') : 'Untitled Video';
+      return {
+        id: `batch-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+        path: p,
+        title,
+        description: '',
+        tags: '',
+        privacyStatus: YT_DEFAULT_PRIVACY,
+        categoryId: YT_DEFAULT_CATEGORY_ID,
+        scheduleEnabled: false,
+        publishAtLocal: '',
+        status: 'pending',
+        progress: 0,
+        message: '',
+        result: null,
+        error: '',
+      };
+    });
+
+    setYoutubeBatchItems((prev) => {
+      const existingPaths = new Set(prev.map((x) => x.path));
+      const merged = [...prev];
+      for (const item of newItems) {
+        if (!existingPaths.has(item.path)) merged.push(item);
       }
-      setStatus('');
+      return merged;
+    });
+    setStatus(`✅ Added ${newItems.length} video(s) to batch queue`);
+  };
+
+  const startBatchUploadItem = (itemId) => {
+    if (!selectedYoutubeProfileId) {
+      setStatus('❌ Please select a YouTube profile/channel first');
+      return;
     }
+    if (!youtubeAuthenticated) {
+      setStatus('❌ Please authenticate with YouTube first');
+      return;
+    }
+
+    const item = youtubeBatchItems.find((x) => x.id === itemId);
+    if (!item) return;
+
+    const tagsSource = typeof item.tags === 'string' ? item.tags : '';
+    const tags = String(tagsSource || '')
+      .split(',')
+      .map(tag => tag.trim())
+      .filter(tag => tag.length > 0);
+
+    const metadata = {
+      title: item.title || 'Untitled Video',
+      description: typeof item.description === 'string' ? item.description : '',
+      tags,
+      privacyStatus: item.privacyStatus || YT_DEFAULT_PRIVACY,
+      categoryId: item.categoryId || YT_DEFAULT_CATEGORY_ID,
+    };
+
+    // Optional per-item scheduling (same rules as single upload)
+    if (item.scheduleEnabled) {
+      const publishDate = parseDatetimeLocalToDate(item.publishAtLocal);
+      if (!publishDate) {
+        setStatus('❌ Please choose a valid schedule date/time for the selected batch video');
+        return;
+      }
+      const msUntil = publishDate.getTime() - Date.now();
+      if (Number.isNaN(msUntil) || msUntil < 60 * 1000) {
+        setStatus('❌ Scheduled publish time must be at least 1 minute in the future');
+        return;
+      }
+      metadata.publishAt = publishDate.toISOString();
+
+      // YouTube requires privacyStatus=private when setting publishAt
+      if (metadata.privacyStatus !== 'private') {
+        metadata.privacyStatus = 'private';
+      }
+    }
+
+    setYoutubeBatchItems((prev) =>
+      prev.map((x) => (x.id === itemId ? { ...x, status: 'uploading', progress: 0, message: 'Starting...' } : x))
+    );
+
+    window.electronAPI.youtubeUploadVideo(selectedYoutubeProfileId, item.path, metadata, itemId);
+  };
+
+  const handleBatchUploadAllParallel = () => {
+    const pending = youtubeBatchItems.filter((x) => x.status === 'pending' || x.status === 'error');
+    if (pending.length === 0) {
+      setStatus('ℹ️ No pending videos in the batch queue');
+      return;
+    }
+    setStatus(`📤 Starting ${pending.length} uploads in parallel...`);
+    pending.forEach((item) => startBatchUploadItem(item.id));
+  };
+
+  const handleBatchClear = () => {
+    setYoutubeBatchItems([]);
+    setEditingBatchItemId('');
+    setStatus('🧹 Batch queue cleared');
+  };
+
+  const openBatchItemEditor = (item) => {
+    if (!item) return;
+    setEditingBatchItemId(item.id);
+    setEditingBatchForm({
+      title: item.title || '',
+      description: item.description || '',
+      tags: item.tags || '',
+      privacyStatus: item.privacyStatus || YT_DEFAULT_PRIVACY,
+      scheduleEnabled: Boolean(item.scheduleEnabled),
+      publishAtLocal: item.publishAtLocal || '',
+    });
+  };
+
+  const closeBatchItemEditor = () => {
+    setEditingBatchItemId('');
+  };
+
+  const saveBatchItemEditor = () => {
+    if (!editingBatchItemId) return;
+    setYoutubeBatchItems((prev) =>
+      prev.map((x) =>
+        x.id === editingBatchItemId
+          ? {
+              ...x,
+              title: editingBatchForm.title,
+              description: editingBatchForm.description,
+              tags: editingBatchForm.tags,
+              privacyStatus: editingBatchForm.privacyStatus,
+              scheduleEnabled: Boolean(editingBatchForm.scheduleEnabled),
+              publishAtLocal: editingBatchForm.publishAtLocal,
+            }
+          : x
+      )
+    );
+    setStatus('✅ Batch item metadata updated');
   };
 
   const handleSaveYoutubeCredentials = async () => {
@@ -553,70 +710,7 @@ function ScrollingTextVideo() {
     return new Date(year, month - 1, day, hour, minute, second, 0);
   };
 
-  const handleYoutubeUpload = () => {
-    if (!selectedYoutubeProfileId) {
-      setStatus('❌ Please select a YouTube profile/channel first');
-      return;
-    }
-    if (!youtubeVideoPath) {
-      setStatus('❌ Please select a video file');
-      return;
-    }
-    if (!youtubeTitle.trim()) {
-      setStatus('❌ Please enter a video title');
-      return;
-    }
-    if (!youtubeAuthenticated) {
-      setStatus('❌ Please authenticate with YouTube first');
-      return;
-    }
-
-    let publishAtIso = null;
-    let effectivePrivacy = youtubePrivacy;
-    if (youtubeScheduleEnabled) {
-      const publishDate = parseDatetimeLocalToDate(youtubePublishAtLocal);
-      if (!publishDate) {
-        setStatus('❌ Please choose a valid schedule date/time');
-        return;
-      }
-      const msUntil = publishDate.getTime() - Date.now();
-      if (Number.isNaN(msUntil) || msUntil < 60 * 1000) {
-        setStatus('❌ Scheduled publish time must be at least 1 minute in the future');
-        return;
-      }
-      publishAtIso = publishDate.toISOString();
-
-      // YouTube requires privacyStatus=private when setting publishAt
-      if (effectivePrivacy !== 'private') {
-        effectivePrivacy = 'private';
-      }
-    }
-
-    setIsYoutubeUploading(true);
-    setYoutubeUploadProgress(0);
-    setYoutubeUploadMessage('Preparing upload...');
-    if (youtubeScheduleEnabled) {
-      setStatus('📤 Uploading now and scheduling publish on YouTube...');
-    } else {
-      setStatus('📤 Starting upload...');
-    }
-
-    const tags = youtubeTags.split(',').map(tag => tag.trim()).filter(tag => tag.length > 0);
-
-    const metadata = {
-      title: youtubeTitle,
-      description: youtubeDescription,
-      tags: tags,
-      privacyStatus: effectivePrivacy,
-      categoryId: youtubeCategory,
-    };
-    if (publishAtIso) {
-      metadata.publishAt = publishAtIso;
-    }
-
-    window.electronAPI.youtubeUploadVideo(selectedYoutubeProfileId, youtubeVideoPath, metadata);
-  };
-
+  // (Single uploader removed; batch uploader is used instead)
 
   const handleSelectImage = async () => {
     const path = await window.electronAPI.selectSingleImage();
@@ -1001,6 +1095,10 @@ function ScrollingTextVideo() {
   ];
 
   const selectedYoutubeProfile = youtubeProfiles.find(p => p.id === selectedYoutubeProfileId) || null;
+  const editingBatchItem = editingBatchItemId ? youtubeBatchItems.find((x) => x.id === editingBatchItemId) : null;
+  const isEditingBatchUploading = Boolean(editingBatchItem && editingBatchItem.status === 'uploading');
+  const editingBatchFilename = editingBatchItem ? editingBatchItem.path.split(/[/\\]/).pop() : '';
+  const isAnyBatchYoutubeUploading = youtubeBatchItems.some((x) => x.status === 'uploading');
 
   return (
     <div className="scrolling-video-container">
@@ -1988,19 +2086,33 @@ function ScrollingTextVideo() {
       {activeMainTab === 'uploader' && (
         <div className="form-section">
           <div className="section-content">
-            <h2>📤 YouTube Video Uploader</h2>
-
             {/* Authentication Section */}
             <div className="form-group" style={{ marginBottom: '20px', padding: '15px', backgroundColor: '#f5f5f5', borderRadius: '8px' }}>
-              <h3 style={{ marginTop: 0 }}>🔐 Authentication</h3>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '12px', marginBottom: '12px' }}>
+                <h3 style={{ marginTop: 0, marginBottom: 0 }}>🔐 Authentication</h3>
+                <div
+                  style={{
+                    fontSize: '13px',
+                    color: selectedYoutubeProfileId && youtubeAuthenticated ? 'green' : '#666',
+                    whiteSpace: 'nowrap',
+                  }}
+                >
+                  {selectedYoutubeProfileId
+                    ? (youtubeAuthenticated
+                        ? `✅ Authenticated${selectedYoutubeProfile?.channel?.title ? ` as ${selectedYoutubeProfile.channel.title}` : ''}`
+                        : 'Not authenticated')
+                    : 'No profile selected'}
+                </div>
+              </div>
+
               <div className="form-group" style={{ marginBottom: '12px' }}>
-                <label>Channel Profile</label>
-                <div className="input-with-button">
+                <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'nowrap', overflowX: 'auto' }}>
+                  <label style={{ margin: 0, whiteSpace: 'nowrap' }}>Channel Profile</label>
                   <select
                     value={selectedYoutubeProfileId}
                     onChange={(e) => handleYoutubeSelectProfile(e.target.value)}
-                    disabled={isYoutubeUploading}
-                    style={{ flex: 1, padding: '8px' }}
+                    disabled={isAnyBatchYoutubeUploading}
+                    style={{ padding: '8px', minWidth: '260px', flex: '1 0 260px' }}
                   >
                     <option value="">-- Select or create a profile --</option>
                     {youtubeProfiles.map((p) => (
@@ -2020,62 +2132,47 @@ function ScrollingTextVideo() {
                       setYoutubeAuthenticated(false);
                     }}
                     className="small-btn"
-                    disabled={isYoutubeUploading}
-                    style={{ marginLeft: '10px' }}
+                    disabled={isAnyBatchYoutubeUploading}
                   >
                     ➕ New
                   </button>
                   <button
                     onClick={handleYoutubeDeleteProfile}
                     className="small-btn"
-                    disabled={isYoutubeUploading || !selectedYoutubeProfileId}
-                    style={{ marginLeft: '10px', backgroundColor: '#dc3545' }}
+                    disabled={isAnyBatchYoutubeUploading || !selectedYoutubeProfileId}
+                    style={{ backgroundColor: '#dc3545' }}
                   >
                     🗑️ Delete
                   </button>
+                  <button
+                    onClick={() => setShowCredentialsForm(!showCredentialsForm)}
+                    className="small-btn"
+                    disabled={isAnyBatchYoutubeUploading}
+                  >
+                    {showCredentialsForm ? '❌ Cancel' : (selectedYoutubeProfileId ? '⚙️ Edit Profile Credentials' : '⚙️ Setup Profile')}
+                  </button>
+                  <button
+                    onClick={handleYoutubeResetAuth}
+                    className="small-btn"
+                    style={{ backgroundColor: '#6c757d' }}
+                    disabled={isAnyBatchYoutubeUploading}
+                  >
+                    🧹 Reset All Profiles
+                  </button>
+                  {youtubeAuthenticated && (
+                    <button onClick={handleYoutubeLogout} className="small-btn" style={{ backgroundColor: '#dc3545' }} disabled={isAnyBatchYoutubeUploading}>
+                      🚪 Logout
+                    </button>
+                  )}
+                  {!youtubeAuthenticated && !showCredentialsForm && !showAuthCodeInput && selectedYoutubeProfileId && (
+                    <button onClick={handleYoutubeAuthenticate} className="small-btn" style={{ backgroundColor: '#28a745' }} disabled={isAnyBatchYoutubeUploading}>
+                      🔑 Authenticate
+                    </button>
+                  )}
                 </div>
-                <small style={{ color: '#666', fontSize: '11px' }}>
+                <small style={{ color: '#666', fontSize: '11px', display: 'block', marginTop: '8px' }}>
                   Each profile stores its own token, so you can upload to multiple YouTube channels by switching profiles.
                 </small>
-              </div>
-
-              {selectedYoutubeProfileId ? (
-                <p style={{ color: youtubeAuthenticated ? 'green' : '#666', marginBottom: '10px' }}>
-                  {youtubeAuthenticated
-                    ? `✅ Authenticated${selectedYoutubeProfile?.channel?.title ? ` as ${selectedYoutubeProfile.channel.title}` : ''}`
-                    : 'Not authenticated'}
-                </p>
-              ) : (
-                <p style={{ color: '#666', marginBottom: '10px' }}>Select or create a profile to authenticate.</p>
-              )}
-
-              <div style={{ marginBottom: '15px' }}>
-                <button
-                  onClick={() => setShowCredentialsForm(!showCredentialsForm)}
-                  className="small-btn"
-                  style={{ marginRight: '10px' }}
-                  disabled={isYoutubeUploading}
-                >
-                  {showCredentialsForm ? '❌ Cancel' : (selectedYoutubeProfileId ? '⚙️ Edit Profile Credentials' : '⚙️ Setup Profile')}
-                </button>
-                <button
-                  onClick={handleYoutubeResetAuth}
-                  className="small-btn"
-                  style={{ marginRight: '10px', backgroundColor: '#6c757d' }}
-                  disabled={isYoutubeUploading}
-                >
-                  🧹 Reset All Profiles
-                </button>
-                {youtubeAuthenticated && (
-                  <button onClick={handleYoutubeLogout} className="small-btn" style={{ marginRight: '10px', backgroundColor: '#dc3545' }}>
-                    🚪 Logout
-                  </button>
-                )}
-                {!youtubeAuthenticated && !showCredentialsForm && !showAuthCodeInput && selectedYoutubeProfileId && (
-                  <button onClick={handleYoutubeAuthenticate} className="small-btn" style={{ backgroundColor: '#28a745' }}>
-                    🔑 Authenticate
-                  </button>
-                )}
               </div>
 
               {showAuthCodeInput && (
@@ -2204,142 +2301,188 @@ function ScrollingTextVideo() {
                   )}
             </div>
 
-            {/* Video Selection */}
-            <div className="form-group">
-              <label>Video File</label>
-              <div className="input-with-button">
-                <input
-                  type="text"
-                  value={youtubeVideoPath ? youtubeVideoPath.split(/[/\\]/).pop() : 'No video selected'}
-                  placeholder="Select a video file to upload"
-                  readOnly
-                  style={{ flex: 1 }}
-                />
-                <button onClick={handleSelectYoutubeVideo} disabled={isYoutubeUploading} className="small-btn">
-                  📁 Select Video
+            {/* Batch Upload */}
+            <div className="form-group" style={{ marginBottom: '20px', padding: '15px', backgroundColor: '#f5f5f5', borderRadius: '8px' }}>
+              <h3 style={{ marginTop: 0 }}>🧾 Batch Upload (multiple videos at the same time)</h3>
+              <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '10px' }}>
+                <button onClick={handleSelectYoutubeVideosBatch} className="small-btn" disabled={isAnyBatchYoutubeUploading || !selectedYoutubeProfileId}>
+                  📁 Select Multiple Videos
+                </button>
+                <button onClick={handleBatchUploadAllParallel} className="small-btn" style={{ backgroundColor: '#28a745' }} disabled={!selectedYoutubeProfileId || !youtubeAuthenticated || youtubeBatchItems.length === 0}>
+                  🚀 Upload All (Parallel)
+                </button>
+                <button onClick={handleBatchClear} className="small-btn" style={{ backgroundColor: '#6c757d' }} disabled={youtubeBatchItems.length === 0}>
+                  🧹 Clear Queue
                 </button>
               </div>
-            </div>
 
-            {/* Video Metadata */}
-            <div className="form-group">
-              <label>Video Title *</label>
-              <input
-                type="text"
-                value={youtubeTitle}
-                onChange={(e) => setYoutubeTitle(e.target.value)}
-                placeholder="Enter video title"
-                disabled={isYoutubeUploading}
-                style={{ width: '100%', padding: '8px' }}
-              />
-            </div>
-
-            <div className="form-group">
-              <label>Description</label>
-              <textarea
-                value={youtubeDescription}
-                onChange={(e) => setYoutubeDescription(e.target.value)}
-                placeholder="Enter video description"
-                rows={4}
-                disabled={isYoutubeUploading}
-                style={{ width: '100%', padding: '8px' }}
-              />
-            </div>
-
-            <div className="form-row">
-              <div className="form-group" style={{ flex: 1 }}>
-                <label>Tags (comma-separated)</label>
-                <input
-                  type="text"
-                  value={youtubeTags}
-                  onChange={(e) => setYoutubeTags(e.target.value)}
-                  placeholder="tag1, tag2, tag3"
-                  disabled={isYoutubeUploading}
-                  style={{ width: '100%', padding: '8px' }}
-                />
-              </div>
-              <div className="form-group" style={{ flex: 1 }}>
-                <label>Privacy Status</label>
-                <select
-                  value={youtubePrivacy}
-                  onChange={(e) => setYoutubePrivacy(e.target.value)}
-                  disabled={isYoutubeUploading}
-                  style={{ width: '100%', padding: '8px' }}
-                >
-                  <option value="private">Private</option>
-                  <option value="unlisted">Unlisted</option>
-                  <option value="public">Public</option>
-                </select>
-              </div>
-            </div>
-
-            {/* Scheduling */}
-            <div className="form-group" style={{ marginTop: '10px', padding: '12px', backgroundColor: '#f5f5f5', borderRadius: '8px' }}>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: youtubeScheduleEnabled ? '10px' : 0 }}>
-                <input
-                  id="youtubeScheduleEnabled"
-                  type="checkbox"
-                  checked={youtubeScheduleEnabled}
-                  onChange={(e) => setYoutubeScheduleEnabled(e.target.checked)}
-                  disabled={isYoutubeUploading}
-                />
-                <label htmlFor="youtubeScheduleEnabled" style={{ margin: 0 }}>
-                  Schedule publish (upload now, publish later)
-                </label>
-              </div>
-
-              {youtubeScheduleEnabled && (
+              {youtubeBatchItems.length > 0 ? (
                 <>
-                  <div className="form-group" style={{ marginBottom: '8px' }}>
-                    <label>Publish Date & Time (your local time)</label>
-                    <input
-                      type="datetime-local"
-                      value={youtubePublishAtLocal}
-                      onChange={(e) => setYoutubePublishAtLocal(e.target.value)}
-                      disabled={isYoutubeUploading}
-                      style={{ width: '100%', padding: '8px' }}
-                    />
+                  <div style={{ backgroundColor: 'white', borderRadius: '6px', padding: '10px', maxHeight: '220px', overflow: 'auto' }}>
+                    {youtubeBatchItems.map((item) => (
+                      <div key={item.id} style={{ borderBottom: '1px solid #eee', padding: '8px 0' }}>
+                        <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                          <div style={{ flex: 1 }}>
+                            <div style={{ fontSize: '12px', color: '#666' }}>{item.path.split(/[/\\]/).pop()}</div>
+                            <input
+                              type="text"
+                              value={item.title}
+                              onChange={(e) => {
+                                const v = e.target.value;
+                                setYoutubeBatchItems((prev) => prev.map((x) => (x.id === item.id ? { ...x, title: v } : x)));
+                              }}
+                              disabled={item.status === 'uploading'}
+                              style={{ width: '100%', padding: '6px', marginTop: '4px' }}
+                              placeholder="Title"
+                            />
+                            <div style={{ fontSize: '11px', marginTop: '4px', color: item.status === 'error' ? '#d32f2f' : '#666' }}>
+                              {item.status === 'uploading' ? `${item.progress || 0}% ${item.message || ''}` : ''}
+                              {item.status === 'done' ? `✅ Done${item.result?.url ? `: ${item.result.url}` : ''}` : ''}
+                              {item.status === 'error' ? `❌ ${item.error}` : ''}
+                              {item.status === 'pending' ? '⏸️ Pending' : ''}
+                            </div>
+                          </div>
+
+                          {/* Edit button must appear before Upload for each video */}
+                          <button
+                            onClick={() => openBatchItemEditor(item)}
+                            className="small-btn"
+                            disabled={item.status === 'uploading'}
+                            style={{ backgroundColor: editingBatchItemId === item.id ? '#17a2b8' : '#6c757d' }}
+                            title="Edit metadata for this video"
+                          >
+                            ✏️ Edit
+                          </button>
+
+                          <button
+                            onClick={() => startBatchUploadItem(item.id)}
+                            className="small-btn"
+                            disabled={!youtubeAuthenticated || item.status === 'uploading'}
+                            style={{ backgroundColor: '#007bff' }}
+                          >
+                            📤 Upload
+                          </button>
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                  <small style={{ color: '#666', fontSize: '11px' }}>
-                    Scheduling requires the video to be <strong>Private</strong>. If you selected Public/Unlisted, the app will still upload as Private and schedule publishing.
-                  </small>
+
+                  {/* Dedicated editor UI appears below the entire list */}
+                  {editingBatchItemId && (
+                    <div style={{ marginTop: '12px', padding: '12px', backgroundColor: 'white', borderRadius: '6px', border: '1px solid #eee' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
+                        <div>
+                          <div style={{ fontWeight: 600 }}>✏️ Edit batch video details</div>
+                          <div style={{ fontSize: '12px', color: '#666' }}>
+                            {editingBatchFilename}
+                          </div>
+                        </div>
+                        <div style={{ display: 'flex', gap: '10px' }}>
+                          <button
+                            onClick={saveBatchItemEditor}
+                            className="small-btn"
+                            style={{ backgroundColor: '#007bff' }}
+                            disabled={!editingBatchItemId || isEditingBatchUploading}
+                          >
+                            💾 Save
+                          </button>
+                          <button onClick={closeBatchItemEditor} className="small-btn">
+                            ✅ Done
+                          </button>
+                        </div>
+                      </div>
+
+                      <div className="form-group" style={{ marginTop: '10px' }}>
+                        <label>Title</label>
+                        <input
+                          type="text"
+                          value={editingBatchForm.title}
+                          onChange={(e) => setEditingBatchForm((prev) => ({ ...prev, title: e.target.value }))}
+                          disabled={isEditingBatchUploading}
+                          style={{ width: '100%', padding: '8px' }}
+                        />
+                      </div>
+
+                      <div className="form-group">
+                        <label>Description</label>
+                        <textarea
+                          value={editingBatchForm.description}
+                          onChange={(e) => setEditingBatchForm((prev) => ({ ...prev, description: e.target.value }))}
+                          disabled={isEditingBatchUploading}
+                          rows={4}
+                          style={{ width: '100%', padding: '8px' }}
+                        />
+                      </div>
+
+                      <div className="form-row">
+                        <div className="form-group" style={{ flex: 1 }}>
+                          <label>Tags (comma-separated)</label>
+                          <input
+                            type="text"
+                            value={editingBatchForm.tags}
+                            onChange={(e) => setEditingBatchForm((prev) => ({ ...prev, tags: e.target.value }))}
+                            disabled={isEditingBatchUploading}
+                            placeholder="tag1, tag2, tag3"
+                            style={{ width: '100%', padding: '8px' }}
+                          />
+                        </div>
+                        <div className="form-group" style={{ flex: 1 }}>
+                          <label>Privacy Status</label>
+                          <select
+                            value={editingBatchForm.privacyStatus}
+                            onChange={(e) => setEditingBatchForm((prev) => ({ ...prev, privacyStatus: e.target.value }))}
+                            disabled={isEditingBatchUploading}
+                            style={{ width: '100%', padding: '8px' }}
+                          >
+                            <option value="private">Private</option>
+                            <option value="unlisted">Unlisted</option>
+                            <option value="public">Public</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      {/* Scheduling (per video) */}
+                      <div className="form-group" style={{ marginTop: '10px', padding: '12px', backgroundColor: '#f5f5f5', borderRadius: '8px' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: editingBatchForm.scheduleEnabled ? '10px' : 0 }}>
+                          <input
+                            id="batchScheduleEnabled"
+                            type="checkbox"
+                            checked={Boolean(editingBatchForm.scheduleEnabled)}
+                            onChange={(e) => setEditingBatchForm((prev) => ({ ...prev, scheduleEnabled: e.target.checked }))}
+                            disabled={isEditingBatchUploading}
+                          />
+                          <label htmlFor="batchScheduleEnabled" style={{ margin: 0 }}>
+                            Schedule publish (upload now, publish later)
+                          </label>
+                        </div>
+
+                        {editingBatchForm.scheduleEnabled && (
+                          <>
+                            <div className="form-group" style={{ marginBottom: '8px' }}>
+                              <label>Publish Date &amp; Time (your local time)</label>
+                              <input
+                                type="datetime-local"
+                                value={editingBatchForm.publishAtLocal}
+                                onChange={(e) => setEditingBatchForm((prev) => ({ ...prev, publishAtLocal: e.target.value }))}
+                                disabled={isEditingBatchUploading}
+                                style={{ width: '100%', padding: '8px' }}
+                              />
+                            </div>
+                            <small style={{ color: '#666', fontSize: '11px' }}>
+                              Scheduling requires the video to be <strong>Private</strong>. If you selected Public/Unlisted, the app will still upload as Private and schedule publishing.
+                            </small>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  )}
                 </>
+              ) : (
+                <small style={{ color: '#666', fontSize: '11px' }}>
+                  Tip: Select multiple files, then click “Upload All (Parallel)” to upload multiple videos at the same time.
+                </small>
               )}
             </div>
-
-            {/* Upload Button */}
-            <button
-              onClick={handleYoutubeUpload}
-              disabled={
-                isYoutubeUploading ||
-                !selectedYoutubeProfileId ||
-                !youtubeAuthenticated ||
-                !youtubeVideoPath ||
-                !youtubeTitle.trim() ||
-                (youtubeScheduleEnabled && !youtubePublishAtLocal)
-              }
-              className="generate-button"
-              style={{ marginTop: '20px' }}
-            >
-              {isYoutubeUploading ? '⏳ Uploading...' : '📤 Upload to YouTube'}
-            </button>
-
-            {/* Upload Progress */}
-            {isYoutubeUploading && (
-              <div className="progress-section" style={{ marginTop: '20px' }}>
-                <div className="progress-bar-container">
-                  <div
-                    className="progress-bar-fill"
-                    style={{ width: `${youtubeUploadProgress}%` }}
-                  >
-                    <span className="progress-text">{youtubeUploadProgress}%</span>
-                  </div>
-                </div>
-                {youtubeUploadMessage && (
-                  <p className="progress-message">{youtubeUploadMessage}</p>
-                )}
-              </div>
-            )}
 
             {/* Status Message */}
             {status && <p className="status-message">{status}</p>}

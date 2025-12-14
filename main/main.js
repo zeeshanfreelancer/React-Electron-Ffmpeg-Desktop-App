@@ -183,6 +183,16 @@ function registerIpcHandlers() {
     return result.filePaths[0];
   });
 
+  // 🎥 Select multiple video files
+  ipcMain.handle('select-videos', async () => {
+    const result = await dialog.showOpenDialog({
+      properties: ['openFile', 'multiSelections'],
+      filters: [{ name: 'Videos', extensions: ['mp4', 'mov', 'avi', 'mkv', 'webm'] }],
+    });
+    if (result.canceled) return null;
+    return result.filePaths;
+  });
+
   // 🎵 Select audio file
   ipcMain.handle('select-audio', async () => {
     const result = await dialog.showOpenDialog({
@@ -593,16 +603,16 @@ function registerIpcHandlers() {
   });
 
   // Upload video to YouTube
-  ipcMain.on('youtube-upload-video', async (event, { profileId, videoPath, metadata }) => {
+  ipcMain.on('youtube-upload-video', async (event, { profileId, videoPath, metadata, uploadId }) => {
     try {
       const progressCallback = (progress) => {
-        event.sender.send('youtube-upload-progress', progress);
+        event.sender.send('youtube-upload-progress', { uploadId, profileId, ...progress });
       };
 
       const result = await youtubeUploader.uploadVideo(profileId, videoPath, metadata, progressCallback, ipcMain);
-      event.sender.send('youtube-upload-success', result);
+      event.sender.send('youtube-upload-success', { uploadId, profileId, ...result });
     } catch (error) {
-      event.sender.send('youtube-upload-error', error.message);
+      event.sender.send('youtube-upload-error', { uploadId, profileId, error: error.message });
     }
   });
 

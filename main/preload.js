@@ -7,6 +7,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Video/Audio selection
   selectVideo: () => ipcRenderer.invoke('select-video'),
+  selectVideos: () => ipcRenderer.invoke('select-videos'),
   selectAudio: () => ipcRenderer.invoke('select-audio'),
   selectSubtitle: () => ipcRenderer.invoke('select-subtitle'),
 
@@ -75,8 +76,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
   youtubeDeleteProfile: (profileId) => ipcRenderer.invoke('youtube-delete-profile', profileId),
   youtubeCheckAuth: (profileId) => ipcRenderer.invoke('youtube-check-auth', profileId),
   youtubeAuthenticate: (profileId) => ipcRenderer.send('youtube-authenticate', profileId),
-  youtubeUploadVideo: (profileId, videoPath, metadata) =>
-    ipcRenderer.send('youtube-upload-video', { profileId, videoPath, metadata }),
+  youtubeUploadVideo: (profileId, videoPath, metadata, uploadId) =>
+    ipcRenderer.send('youtube-upload-video', { profileId, videoPath, metadata, uploadId }),
   youtubeLogoutProfile: (profileId) => ipcRenderer.invoke('youtube-logout-profile', profileId),
   youtubeResetAuth: () => ipcRenderer.invoke('youtube-reset-auth'),
   youtubeOpenUrl: (url) => ipcRenderer.invoke('youtube-open-url', url),
