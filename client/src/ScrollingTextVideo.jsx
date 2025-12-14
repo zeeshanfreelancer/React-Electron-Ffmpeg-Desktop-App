@@ -72,7 +72,10 @@ function ScrollingTextVideo() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [progress, setProgress] = useState(0);
   const [progressMessage, setProgressMessage] = useState('');
-  const [status, setStatus] = useState('');
+  // Scoped status messages so notifications only appear in the relevant section
+  const [scrollingStatus, setScrollingStatus] = useState('');
+  const [panZoomStatus, setPanZoomStatus] = useState('');
+  const [youtubeStatus, setYoutubeStatus] = useState('');
   const [activeMainTab, setActiveMainTab] = useState('advanced');
   const [activeSettingsTab, setActiveSettingsTab] = useState('basic');
 
@@ -166,21 +169,21 @@ function ScrollingTextVideo() {
       setIsGenerating(false);
       setProgress(100);
       setProgressMessage('');
-      setStatus(`✅ Video created successfully: ${path}`);
+      setScrollingStatus(`✅ Video created successfully: ${path}`);
     });
 
     window.electronAPI.onScrollingVideoError((error) => {
       setIsGenerating(false);
       setProgress(0);
       setProgressMessage('');
-      setStatus(`❌ Error: ${error}`);
+      setScrollingStatus(`❌ Error: ${error}`);
     });
 
     window.electronAPI.onScrollingVideoCancelled(() => {
       setIsGenerating(false);
       setProgress(0);
       setProgressMessage('');
-      setStatus('⚠️ Video generation cancelled');
+      setScrollingStatus('⚠️ Video generation cancelled');
     });
 
     // Pan/Zoom Video Generator event listeners
@@ -198,21 +201,21 @@ function ScrollingTextVideo() {
       setIsPanZoomGenerating(false);
       setPanZoomProgress(100);
       setPanZoomProgressMessage('');
-      setStatus(`✅ Pan/Zoom videos created successfully! Total: ${result.totalVideos} videos in ${result.outputFolder}`);
+      setPanZoomStatus(`✅ Pan/Zoom videos created successfully! Total: ${result.totalVideos} videos in ${result.outputFolder}`);
     });
 
     window.electronAPI.onPanZoomVideoError((error) => {
       setIsPanZoomGenerating(false);
       setPanZoomProgress(0);
       setPanZoomProgressMessage('');
-      setStatus(`❌ Error: ${error}`);
+      setPanZoomStatus(`❌ Error: ${error}`);
     });
 
     window.electronAPI.onPanZoomVideoCancelled(() => {
       setIsPanZoomGenerating(false);
       setPanZoomProgress(0);
       setPanZoomProgressMessage('');
-      setStatus('⚠️ Video generation cancelled');
+      setPanZoomStatus('⚠️ Video generation cancelled');
     });
 
     return () => {
@@ -242,7 +245,7 @@ function ScrollingTextVideo() {
       }
       window.electronAPI.youtubeOpenUrl(url);
       setShowAuthCodeInput(true);
-      setStatus('🔐 Please authorize the app in your browser. After authorization, copy the code from the URL and paste it below.');
+      setYoutubeStatus('🔐 Please authorize the app in your browser. After authorization, copy the code from the URL and paste it below.');
     });
 
     window.electronAPI.onYoutubeAuthSuccess(async (payload) => {
@@ -251,7 +254,7 @@ function ScrollingTextVideo() {
         setSelectedYoutubeProfileId(profileId);
       }
       setYoutubeAuthenticated(true);
-      setStatus('✅ Successfully authenticated with YouTube!');
+      setYoutubeStatus('✅ Successfully authenticated with YouTube!');
       await refreshYoutubeProfiles(profileId);
     });
 
@@ -290,7 +293,7 @@ function ScrollingTextVideo() {
               : item
           )
         );
-        setStatus(`✅ Uploaded: ${result.url || 'Success'}`);
+        setYoutubeStatus(`✅ Uploaded: ${result.url || 'Success'}`);
         return;
       }
     });
@@ -303,7 +306,7 @@ function ScrollingTextVideo() {
         setYoutubeBatchItems((prev) =>
           prev.map((item) => (item.id === id ? { ...item, status: 'error', error: errStr, message: '' } : item))
         );
-        setStatus(`❌ Upload failed: ${errStr}`);
+        setYoutubeStatus(`❌ Upload failed: ${errStr}`);
         return;
       }
       const errStr = String(error || '');
@@ -328,7 +331,7 @@ function ScrollingTextVideo() {
         errorMessage += '2. Verify your OAuth consent screen + Test User settings\n';
       }
 
-      setStatus(errorMessage);
+      setYoutubeStatus(errorMessage);
     });
 
     window.electronAPI.onYoutubeError((error) => {
@@ -348,7 +351,7 @@ function ScrollingTextVideo() {
         errorMessage += '3. Check that redirect URI matches exactly in Google Cloud Console';
       }
       
-      setStatus(errorMessage);
+      setYoutubeStatus(errorMessage);
     });
 
     return () => {
@@ -440,16 +443,16 @@ function ScrollingTextVideo() {
       }
       return merged;
     });
-    setStatus(`✅ Added ${newItems.length} video(s) to batch queue`);
+    setYoutubeStatus(`✅ Added ${newItems.length} video(s) to batch queue`);
   };
 
   const startBatchUploadItem = (itemId) => {
     if (!selectedYoutubeProfileId) {
-      setStatus('❌ Please select a YouTube profile/channel first');
+      setYoutubeStatus('❌ Please select a YouTube profile/channel first');
       return;
     }
     if (!youtubeAuthenticated) {
-      setStatus('❌ Please authenticate with YouTube first');
+      setYoutubeStatus('❌ Please authenticate with YouTube first');
       return;
     }
 
@@ -474,12 +477,12 @@ function ScrollingTextVideo() {
     if (item.scheduleEnabled) {
       const publishDate = parseDatetimeLocalToDate(item.publishAtLocal);
       if (!publishDate) {
-        setStatus('❌ Please choose a valid schedule date/time for the selected batch video');
+        setYoutubeStatus('❌ Please choose a valid schedule date/time for the selected batch video');
         return;
       }
       const msUntil = publishDate.getTime() - Date.now();
       if (Number.isNaN(msUntil) || msUntil < 60 * 1000) {
-        setStatus('❌ Scheduled publish time must be at least 1 minute in the future');
+        setYoutubeStatus('❌ Scheduled publish time must be at least 1 minute in the future');
         return;
       }
       metadata.publishAt = publishDate.toISOString();
@@ -500,17 +503,17 @@ function ScrollingTextVideo() {
   const handleBatchUploadAllParallel = () => {
     const pending = youtubeBatchItems.filter((x) => x.status === 'pending' || x.status === 'error');
     if (pending.length === 0) {
-      setStatus('ℹ️ No pending videos in the batch queue');
+      setYoutubeStatus('ℹ️ No pending videos in the batch queue');
       return;
     }
-    setStatus(`📤 Starting ${pending.length} uploads in parallel...`);
+    setYoutubeStatus(`📤 Starting ${pending.length} uploads in parallel...`);
     pending.forEach((item) => startBatchUploadItem(item.id));
   };
 
   const handleBatchClear = () => {
     setYoutubeBatchItems([]);
     setEditingBatchItemId('');
-    setStatus('🧹 Batch queue cleared');
+    setYoutubeStatus('🧹 Batch queue cleared');
   };
 
   const openBatchItemEditor = (item) => {
@@ -547,12 +550,12 @@ function ScrollingTextVideo() {
           : x
       )
     );
-    setStatus('✅ Batch item metadata updated');
+    setYoutubeStatus('✅ Batch item metadata updated');
   };
 
   const handleSaveYoutubeCredentials = async () => {
     if (!youtubeCredentials.clientId || !youtubeCredentials.clientSecret) {
-      setStatus('❌ Please enter both Client ID and Client Secret');
+      setYoutubeStatus('❌ Please enter both Client ID and Client Secret');
       return;
     }
 
@@ -580,16 +583,16 @@ function ScrollingTextVideo() {
       });
       const profileId = result && result.profileId ? result.profileId : '';
       await refreshYoutubeProfiles(profileId);
-      setStatus('✅ Profile saved! Make sure the redirect URI in Google Cloud Console matches exactly: ' + redirectUri);
+      setYoutubeStatus('✅ Profile saved! Make sure the redirect URI in Google Cloud Console matches exactly: ' + redirectUri);
       setShowCredentialsForm(false);
     } catch (error) {
-      setStatus(`❌ Failed to save credentials: ${error.message}`);
+      setYoutubeStatus(`❌ Failed to save credentials: ${error.message}`);
     }
   };
 
   const handleYoutubeAuthenticate = () => {
     if (!selectedYoutubeProfileId) {
-      setStatus('❌ Please create/select a YouTube profile first');
+      setYoutubeStatus('❌ Please create/select a YouTube profile first');
       return;
     }
     setShowAuthCodeInput(false);
@@ -615,16 +618,16 @@ function ScrollingTextVideo() {
     }
     
     if (!code) {
-      setStatus('❌ Please enter the authorization code');
+      setYoutubeStatus('❌ Please enter the authorization code');
       return;
     }
     
     if (!selectedYoutubeProfileId) {
-      setStatus('❌ Please create/select a YouTube profile first');
+      setYoutubeStatus('❌ Please create/select a YouTube profile first');
       return;
     }
 
-    setStatus('⏳ Verifying authorization code...');
+    setYoutubeStatus('⏳ Verifying authorization code...');
     window.electronAPI.youtubeSendAuthCode(selectedYoutubeProfileId, code);
     setShowAuthCodeInput(false);
     setYoutubeAuthCode('');
@@ -633,14 +636,14 @@ function ScrollingTextVideo() {
   const handleYoutubeLogout = async () => {
     try {
       if (!selectedYoutubeProfileId) {
-        setStatus('❌ Please select a YouTube profile first');
+        setYoutubeStatus('❌ Please select a YouTube profile first');
         return;
       }
       await window.electronAPI.youtubeLogoutProfile(selectedYoutubeProfileId);
       setYoutubeAuthenticated(false);
-      setStatus('✅ Logged out successfully');
+      setYoutubeStatus('✅ Logged out successfully');
     } catch (error) {
-      setStatus(`❌ Failed to logout: ${error.message}`);
+      setYoutubeStatus(`❌ Failed to logout: ${error.message}`);
     }
   };
 
@@ -657,15 +660,15 @@ function ScrollingTextVideo() {
       setSelectedYoutubeProfileId('');
       setYoutubeProfileLabel('');
       setYoutubeCredentials({ clientId: '', clientSecret: '', redirectUri: '' });
-      setStatus('✅ YouTube profiles reset. Please create a profile and authenticate again.');
+      setYoutubeStatus('✅ YouTube profiles reset. Please create a profile and authenticate again.');
     } catch (error) {
-      setStatus(`❌ Failed to reset OAuth: ${error.message}`);
+      setYoutubeStatus(`❌ Failed to reset OAuth: ${error.message}`);
     }
   };
 
   const handleYoutubeDeleteProfile = async () => {
     if (!selectedYoutubeProfileId) {
-      setStatus('❌ Please select a YouTube profile first');
+      setYoutubeStatus('❌ Please select a YouTube profile first');
       return;
     }
     const ok = window.confirm('Delete the selected YouTube profile and its token from this computer?');
@@ -674,9 +677,9 @@ function ScrollingTextVideo() {
       await window.electronAPI.youtubeDeleteProfile(selectedYoutubeProfileId);
       setYoutubeAuthenticated(false);
       await refreshYoutubeProfiles('');
-      setStatus('✅ Profile deleted');
+      setYoutubeStatus('✅ Profile deleted');
     } catch (error) {
-      setStatus(`❌ Failed to delete profile: ${error.message}`);
+      setYoutubeStatus(`❌ Failed to delete profile: ${error.message}`);
     }
   };
 
@@ -716,7 +719,7 @@ function ScrollingTextVideo() {
     const path = await window.electronAPI.selectSingleImage();
     if (path) {
       setImagePath(path);
-      setStatus('');
+      setScrollingStatus('');
     }
   };
 
@@ -724,7 +727,7 @@ function ScrollingTextVideo() {
     const paths = await window.electronAPI.selectMultipleImages();
     if (paths && paths.length > 0) {
       setImagePaths(paths);
-      setStatus('');
+      setScrollingStatus('');
     }
   };
 
@@ -732,7 +735,7 @@ function ScrollingTextVideo() {
     const path = await window.electronAPI.selectVideo();
     if (path) {
       setVideoPath(path);
-      setStatus('');
+      setScrollingStatus('');
     }
   };
 
@@ -740,7 +743,7 @@ function ScrollingTextVideo() {
     const path = await window.electronAPI.selectAudio();
     if (path) {
       setBackgroundMusic(prev => ({ ...prev, path, enabled: true }));
-      setStatus('');
+      setScrollingStatus('');
     }
   };
 
@@ -755,9 +758,9 @@ function ScrollingTextVideo() {
           filePath: path,
           items: subtitleData.items || subtitleData || [],
         });
-        setStatus(`✅ Subtitle file loaded: ${subtitleData.items?.length || 0} subtitles`);
+        setScrollingStatus(`✅ Subtitle file loaded: ${subtitleData.items?.length || 0} subtitles`);
       } catch (error) {
-        setStatus(`❌ Failed to load subtitle file: ${error.message}`);
+        setScrollingStatus(`❌ Failed to load subtitle file: ${error.message}`);
       }
     }
   };
@@ -766,7 +769,7 @@ function ScrollingTextVideo() {
     const path = await window.electronAPI.selectOutputDirectory();
     if (path) {
       setOutputDirectory(path);
-      setStatus('');
+      setScrollingStatus('');
     }
   };
 
@@ -774,7 +777,7 @@ function ScrollingTextVideo() {
     const path = await window.electronAPI.selectImageFolder();
     if (path) {
       setPanZoomImageFolder(path);
-      setStatus('');
+      setPanZoomStatus('');
     }
   };
 
@@ -782,7 +785,7 @@ function ScrollingTextVideo() {
     const path = await window.electronAPI.selectOutputDirectory();
     if (path) {
       setPanZoomOutputFolder(path);
-      setStatus('');
+      setPanZoomStatus('');
     }
   };
 
@@ -790,25 +793,25 @@ function ScrollingTextVideo() {
     const path = await window.electronAPI.selectAudio();
     if (path) {
       setPanZoomBackgroundMusic(prev => ({ ...prev, path, enabled: true }));
-      setStatus('');
+      setPanZoomStatus('');
     }
   };
 
   const handleGeneratePanZoomVideo = () => {
     if (!panZoomImageFolder) {
-      setStatus('❌ Please select an image folder');
+      setPanZoomStatus('❌ Please select an image folder');
       return;
     }
 
     if (!panZoomOutputFolder) {
-      setStatus('❌ Please select an output folder');
+      setPanZoomStatus('❌ Please select an output folder');
       return;
     }
 
     setIsPanZoomGenerating(true);
     setPanZoomProgress(0);
     setPanZoomProgressMessage('Initializing...');
-    setStatus('🎬 Generating pan/zoom videos...');
+    setPanZoomStatus('🎬 Generating pan/zoom videos...');
 
     const options = {
       imageFolder: panZoomImageFolder,
@@ -833,7 +836,7 @@ function ScrollingTextVideo() {
     setIsPanZoomGenerating(false);
     setPanZoomProgress(0);
     setPanZoomProgressMessage('');
-    setStatus('⚠️ Video generation cancelled');
+    setPanZoomStatus('⚠️ Video generation cancelled');
   };
 
   const handlePanZoomSocialPreset = (preset) => {
@@ -878,9 +881,9 @@ function ScrollingTextVideo() {
     const config = buildConfig();
     try {
       const path = await window.electronAPI.saveProject(config);
-      setStatus(`✅ Project saved: ${path}`);
+      setScrollingStatus(`✅ Project saved: ${path}`);
     } catch (error) {
-      setStatus(`❌ Failed to save project: ${error.message}`);
+      setScrollingStatus(`❌ Failed to save project: ${error.message}`);
     }
   };
 
@@ -888,9 +891,9 @@ function ScrollingTextVideo() {
     try {
       const config = await window.electronAPI.loadProject();
       loadConfig(config);
-      setStatus(`✅ Project loaded successfully`);
+      setScrollingStatus(`✅ Project loaded successfully`);
     } catch (error) {
-      setStatus(`❌ Failed to load project: ${error.message}`);
+      setScrollingStatus(`❌ Failed to load project: ${error.message}`);
     }
   };
 
@@ -979,27 +982,27 @@ function ScrollingTextVideo() {
   const handleGenerate = () => {
     // Validation
     if (!imagePath && imagePaths.length === 0 && !videoPath && !backgroundGradient.enabled) {
-      setStatus('❌ Please select a background image, video, or enable gradient background');
+      setScrollingStatus('❌ Please select a background image, video, or enable gradient background');
       return;
     }
 
     if (!text.trim() && (!texts || texts.every(t => !t.text || !t.text.trim()))) {
-      setStatus('❌ Please enter text to scroll');
+      setScrollingStatus('❌ Please enter text to scroll');
       return;
     }
 
     if (width <= 0 || height <= 0) {
-      setStatus('❌ Width and height must be greater than 0');
+      setScrollingStatus('❌ Width and height must be greater than 0');
       return;
     }
 
     if (scrollSpeed <= 0) {
-      setStatus('❌ Scroll speed must be greater than 0');
+      setScrollingStatus('❌ Scroll speed must be greater than 0');
       return;
     }
 
     if (fontSize <= 0) {
-      setStatus('❌ Font size must be greater than 0');
+      setScrollingStatus('❌ Font size must be greater than 0');
       return;
     }
 
@@ -1007,7 +1010,7 @@ function ScrollingTextVideo() {
     setIsGenerating(true);
     setProgress(0);
     setProgressMessage('Initializing...');
-    setStatus('🎬 Generating video...');
+    setScrollingStatus('🎬 Generating video...');
 
     const options = buildConfig();
     window.electronAPI.generateScrollingVideo(options);
@@ -1018,7 +1021,7 @@ function ScrollingTextVideo() {
     setIsGenerating(false);
     setProgress(0);
     setProgressMessage('');
-    setStatus('⚠️ Video generation cancelled');
+    setScrollingStatus('⚠️ Video generation cancelled');
   };
 
   const fontFamilies = [
@@ -1812,7 +1815,7 @@ function ScrollingTextVideo() {
         )}
 
         {/* Status Message */}
-        {status && <p className="status-message">{status}</p>}
+        {scrollingStatus && <p className="status-message">{scrollingStatus}</p>}
       </div>
         </>
       )}
@@ -2077,7 +2080,7 @@ function ScrollingTextVideo() {
             )}
 
             {/* Status Message */}
-            {status && <p className="status-message">{status}</p>}
+            {panZoomStatus && <p className="status-message">{panZoomStatus}</p>}
           </div>
         </div>
       )}
@@ -2485,7 +2488,7 @@ function ScrollingTextVideo() {
             </div>
 
             {/* Status Message */}
-            {status && <p className="status-message">{status}</p>}
+            {youtubeStatus && <p className="status-message">{youtubeStatus}</p>}
           </div>
         </div>
       )}
