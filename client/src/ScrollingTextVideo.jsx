@@ -2,6 +2,8 @@ import React, { useState, useEffect, useRef } from 'react';
 import './ScrollingTextVideo.css';
 
 function ScrollingTextVideo() {
+  const YT_SELECTED_PROFILE_KEY = 'slideshow-generator.youtube.selectedProfileId';
+
   // Basic state
   const [imagePath, setImagePath] = useState('');
   const [imagePaths, setImagePaths] = useState([]);
@@ -97,6 +99,15 @@ function ScrollingTextVideo() {
   const selectedYoutubeProfileIdRef = useRef('');
   useEffect(() => {
     selectedYoutubeProfileIdRef.current = selectedYoutubeProfileId;
+    try {
+      if (selectedYoutubeProfileId) {
+        localStorage.setItem(YT_SELECTED_PROFILE_KEY, selectedYoutubeProfileId);
+      } else {
+        localStorage.removeItem(YT_SELECTED_PROFILE_KEY);
+      }
+    } catch (_) {
+      // ignore storage failures
+    }
   }, [selectedYoutubeProfileId]);
 
   // Pan/Zoom Video Generator state
@@ -213,7 +224,13 @@ function ScrollingTextVideo() {
   // YouTube Upload useEffect
   useEffect(() => {
     // Load profiles and auth status on mount
-    refreshYoutubeProfiles();
+    let preferred = '';
+    try {
+      preferred = localStorage.getItem(YT_SELECTED_PROFILE_KEY) || '';
+    } catch (_) {
+      preferred = '';
+    }
+    refreshYoutubeProfiles(preferred);
 
     // Set up YouTube event listeners
     window.electronAPI.onYoutubeAuthUrl((payload) => {
