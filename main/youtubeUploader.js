@@ -2,19 +2,71 @@ const { google } = require('googleapis');
 const fs = require('fs');
 const fsPromises = require('fs').promises;
 const path = require('path');
-const os = require('os');
+const crypto = require('crypto');
 
 // OAuth 2.0 configuration
 const SCOPES = ['https://www.googleapis.com/auth/youtube.upload'];
-const TOKEN_PATH = path.join(os.homedir(), '.youtube-uploader-token.json');
-const CREDENTIALS_PATH = path.join(os.homedir(), '.youtube-uploader-credentials.json');
 
-let oauth2Client = null;
+let storageDir = null;
+let profilesPath = null;
+let tokensDir = null;
+
+// Cache clients per profile to avoid re-creating for every call
+const oauthClientsByProfileId = new Map();
+
+function requireInit() {
+  if (!storageDir || !profilesPath || !tokensDir) {
+    throw new Error('YouTube uploader is not initialized. Call youtubeUploader.init({ storageDir }) first.');
+  }
+}
+
+async function ensureStorage() {
+  requireInit();
+  await fsPromises.mkdir(storageDir, { recursive: true });
+  await fsPromises.mkdir(tokensDir, { recursive: true });
+  try {
+    await fsPromises.access(profilesPath);
+  } catch (_) {
+    await fsPromises.writeFile(profilesPath, JSON.stringify({ profiles: [] }, null, 2));
+  }
+}
+
+function tokenPathForProfile(profileId) {
+  requireInit();
+  return path.join(tokensDir, `${profileId}.json`);
+}
+
+async function readProfilesFile() {
+  await ensureStorage();
+  const raw = await fsPromises.readFile(profilesPath, 'utf-8');
+  const parsed = JSON.parse(raw || '{}');
+  const profiles = Array.isArray(parsed.profiles) ? parsed.profiles : [];
+  return { profiles };
+}
+
+async function writeProfilesFile(profiles) {
+  await ensureStorage();
+  await fsPromises.writeFile(profilesPath, JSON.stringify({ profiles }, null, 2));
+}
 
 /**
- * Load or request authorization credentials
+ * Initialize storage directory (should be Electron app.getPath('userData') based).
  */
-async function authorize(credentials, event, ipcMain) {
+function init({ storageDir: dir }) {
+  storageDir = dir;
+  profilesPath = path.join(storageDir, 'profiles.json');
+  tokensDir = path.join(storageDir, 'tokens');
+}
+
+function normalizeRedirectUri(uri) {
+  let redirectUri = (uri || 'http://localhost').trim().replace(/\/$/, '');
+  if (redirectUri.includes('localhost') && redirectUri !== 'http://localhost') {
+    redirectUri = 'http://localhost';
+  }
+  return redirectUri;
+}
+
+function buildOAuthClient(credentials) {
   // Support both installed and web app credentials
   let creds;
   if (credentials.installed) {
@@ -26,44 +78,100 @@ async function authorize(credentials, event, ipcMain) {
   }
 
   const { client_secret, client_id, redirect_uris } = creds;
-  
   if (!client_id || !client_secret) {
     throw new Error('Client ID and Client Secret are required.');
   }
 
-  // Use the first redirect URI, or default to localhost for Electron
-  // Normalize the redirect URI - remove trailing slashes and ensure no port
-  let redirectUri = redirect_uris && redirect_uris.length > 0 
-    ? redirect_uris[0] 
-    : 'http://localhost';
-  
-  // Normalize redirect URI
-  redirectUri = redirectUri.trim().replace(/\/$/, ''); // Remove trailing slash
-  if (redirectUri.includes('localhost') && redirectUri !== 'http://localhost') {
-    // If it has a port or path, use just http://localhost
-    redirectUri = 'http://localhost';
-  }
-  
-  oauth2Client = new google.auth.OAuth2(client_id, client_secret, redirectUri);
+  const redirectUri = normalizeRedirectUri(
+    redirect_uris && redirect_uris.length > 0 ? redirect_uris[0] : 'http://localhost'
+  );
 
-  // Check if we have previously stored a token
+  return new google.auth.OAuth2(client_id, client_secret, redirectUri);
+}
+
+async function getProfile(profileId) {
+  const { profiles } = await readProfilesFile();
+  return profiles.find((p) => p.id === profileId) || null;
+}
+
+async function listProfiles() {
+  const { profiles } = await readProfilesFile();
+  // Do not leak secrets back to renderer
+  return profiles.map((p) => ({
+    id: p.id,
+    label: p.label || '',
+    channel: p.channel || null,
+    updatedAt: p.updatedAt || null,
+    createdAt: p.createdAt || null,
+  }));
+}
+
+async function saveProfile({ id, label, credentials }) {
+  if (!credentials) throw new Error('Credentials are required.');
+  const { profiles } = await readProfilesFile();
+
+  const now = new Date().toISOString();
+  const profileId = id || crypto.randomUUID();
+  const existingIdx = profiles.findIndex((p) => p.id === profileId);
+
+  const profile = {
+    id: profileId,
+    label: (label || '').trim(),
+    credentials,
+    // keep any existing channel info
+    channel: existingIdx >= 0 ? (profiles[existingIdx].channel || null) : null,
+    createdAt: existingIdx >= 0 ? (profiles[existingIdx].createdAt || now) : now,
+    updatedAt: now,
+  };
+
+  if (existingIdx >= 0) {
+    profiles[existingIdx] = profile;
+  } else {
+    profiles.push(profile);
+  }
+
+  await writeProfilesFile(profiles);
+  oauthClientsByProfileId.delete(profileId);
+  return { id: profileId };
+}
+
+async function deleteProfile(profileId) {
+  const { profiles } = await readProfilesFile();
+  const next = profiles.filter((p) => p.id !== profileId);
+  await writeProfilesFile(next);
+  await fsPromises.unlink(tokenPathForProfile(profileId)).catch(() => {});
+  oauthClientsByProfileId.delete(profileId);
+  return true;
+}
+
+/**
+ * Load or request authorization credentials
+ */
+async function authorizeProfile(profileId, event, ipcMain) {
+  const profile = await getProfile(profileId);
+  if (!profile) throw new Error('YouTube profile not found. Please create/select a profile first.');
+
+  const client = buildOAuthClient(profile.credentials);
+  oauthClientsByProfileId.set(profileId, client);
+
+  // Check if we have previously stored a token (per profile)
   try {
-    const token = await fsPromises.readFile(TOKEN_PATH, 'utf-8');
-    oauth2Client.setCredentials(JSON.parse(token));
-    // If the token already exists, consider auth successful for the renderer.
+    const token = await fsPromises.readFile(tokenPathForProfile(profileId), 'utf-8');
+    client.setCredentials(JSON.parse(token));
+
     if (event && event.sender) {
-      event.sender.send('youtube-auth-success');
+      event.sender.send('youtube-auth-success', { profileId });
     }
-    return oauth2Client;
+    return client;
   } catch (err) {
-    return getNewToken(oauth2Client, event, ipcMain);
+    return getNewToken(profileId, client, event, ipcMain);
   }
 }
 
 /**
  * Get and store new token after prompting for user authorization
  */
-function getNewToken(oAuth2Client, event, ipcMain) {
+function getNewToken(profileId, oAuth2Client, event, ipcMain) {
   return new Promise((resolve, reject) => {
     let authUrl;
     try {
@@ -82,12 +190,12 @@ function getNewToken(oAuth2Client, event, ipcMain) {
 
     // Send auth URL to renderer
     if (event && event.sender) {
-      event.sender.send('youtube-auth-url', authUrl);
+      event.sender.send('youtube-auth-url', { profileId, url: authUrl });
     }
 
     // Wait for the code from the renderer
     const codeListener = (authEvent, code) => {
-      ipcMain.removeListener('youtube-auth-code-internal', codeListener);
+      ipcMain.removeListener(`youtube-auth-code-internal:${profileId}`, codeListener);
       
       oAuth2Client.getToken(code, async (err, token) => {
         if (err) {
@@ -101,9 +209,9 @@ function getNewToken(oAuth2Client, event, ipcMain) {
         
         // Store the token to disk for later program executions
         try {
-          await fsPromises.writeFile(TOKEN_PATH, JSON.stringify(token));
+          await fsPromises.writeFile(tokenPathForProfile(profileId), JSON.stringify(token));
           if (event && event.sender) {
-            event.sender.send('youtube-auth-success');
+            event.sender.send('youtube-auth-success', { profileId });
           }
           resolve(oAuth2Client);
         } catch (error) {
@@ -116,82 +224,86 @@ function getNewToken(oAuth2Client, event, ipcMain) {
     };
 
     // Set up listener for auth code
-    ipcMain.once('youtube-auth-code-internal', codeListener);
+    ipcMain.once(`youtube-auth-code-internal:${profileId}`, codeListener);
   });
-}
-
-/**
- * Save credentials to file
- */
-async function saveCredentials(credentials) {
-  try {
-    await fsPromises.writeFile(CREDENTIALS_PATH, JSON.stringify(credentials, null, 2));
-    return true;
-  } catch (error) {
-    throw new Error(`Failed to save credentials: ${error.message}`);
-  }
-}
-
-/**
- * Load credentials from file
- */
-async function loadCredentials() {
-  try {
-    const content = await fsPromises.readFile(CREDENTIALS_PATH, 'utf-8');
-    return JSON.parse(content);
-  } catch (error) {
-    return null;
-  }
 }
 
 /**
  * Check if user is authenticated
  */
-async function isAuthenticated() {
+async function isAuthenticated(profileId) {
   try {
-    const token = await fsPromises.readFile(TOKEN_PATH, 'utf-8');
-    const credentials = await loadCredentials();
-    if (!credentials) return false;
-    
-    let creds;
-    if (credentials.installed) {
-      creds = credentials.installed;
-    } else if (credentials.web) {
-      creds = credentials.web;
-    } else {
-      return false;
-    }
-    
-    const { client_secret, client_id, redirect_uris } = creds;
-    const redirectUri = redirect_uris && redirect_uris.length > 0 
-      ? redirect_uris[0] 
-      : 'http://localhost';
-    
-    oauth2Client = new google.auth.OAuth2(client_id, client_secret, redirectUri);
-    oauth2Client.setCredentials(JSON.parse(token));
-    
-    // Test the token by getting user info
-    const youtube = google.youtube({ version: 'v3', auth: oauth2Client });
-    await youtube.channels.list({ part: 'snippet', mine: true });
+    const profile = await getProfile(profileId);
+    if (!profile) return false;
+
+    const token = await fsPromises.readFile(tokenPathForProfile(profileId), 'utf-8');
+    const client = buildOAuthClient(profile.credentials);
+    client.setCredentials(JSON.parse(token));
+    oauthClientsByProfileId.set(profileId, client);
+
+    // Validate the token without requiring extra YouTube scopes.
+    // (youtube.upload scope may not be sufficient for channels.list(mine:true))
+    const accessTokenResponse = await client.getAccessToken();
+    const accessToken = accessTokenResponse && accessTokenResponse.token ? accessTokenResponse.token : null;
+    if (!accessToken) return false;
     return true;
   } catch (error) {
     return false;
   }
 }
 
+async function fetchAndStoreChannelInfo(profileId) {
+  try {
+    const profile = await getProfile(profileId);
+    if (!profile) return null;
+    const token = await fsPromises.readFile(tokenPathForProfile(profileId), 'utf-8');
+    const client = buildOAuthClient(profile.credentials);
+    client.setCredentials(JSON.parse(token));
+    const youtube = google.youtube({ version: 'v3', auth: client });
+    const resp = await youtube.channels.list({ part: 'snippet', mine: true });
+    const first = resp.data && resp.data.items && resp.data.items[0];
+    if (!first) return null;
+
+    const { profiles } = await readProfilesFile();
+    const idx = profiles.findIndex((p) => p.id === profileId);
+    if (idx >= 0) {
+      profiles[idx] = {
+        ...profiles[idx],
+        channel: {
+          id: first.id,
+          title: first.snippet && first.snippet.title ? first.snippet.title : '',
+        },
+        updatedAt: new Date().toISOString(),
+      };
+      await writeProfilesFile(profiles);
+    }
+    return { id: first.id, title: first.snippet && first.snippet.title ? first.snippet.title : '' };
+  } catch (_) {
+    return null;
+  }
+}
+
 /**
  * Upload video to YouTube
  */
-async function uploadVideo(videoPath, metadata, progressCallback, ipcMain) {
-  if (!oauth2Client) {
-    const credentials = await loadCredentials();
-    if (!credentials) {
-      throw new Error('No credentials found. Please set up OAuth credentials first.');
+async function uploadVideo(profileId, videoPath, metadata, progressCallback, ipcMain) {
+  let client = oauthClientsByProfileId.get(profileId) || null;
+  if (!client) {
+    const profile = await getProfile(profileId);
+    if (!profile) {
+      throw new Error('No YouTube profile selected. Please select a profile first.');
     }
-    await authorize(credentials, null, ipcMain);
+    client = buildOAuthClient(profile.credentials);
+    try {
+      const token = await fsPromises.readFile(tokenPathForProfile(profileId), 'utf-8');
+      client.setCredentials(JSON.parse(token));
+      oauthClientsByProfileId.set(profileId, client);
+    } catch (_) {
+      throw new Error('Not authenticated for the selected YouTube profile. Please authenticate first.');
+    }
   }
 
-  const youtube = google.youtube({ version: 'v3', auth: oauth2Client });
+  const youtube = google.youtube({ version: 'v3', auth: client });
 
   const wantsSchedule = Boolean(metadata && metadata.publishAt);
   const effectivePrivacyStatus = wantsSchedule ? 'private' : (metadata.privacyStatus || 'private');
@@ -246,31 +358,32 @@ async function uploadVideo(videoPath, metadata, progressCallback, ipcMain) {
   });
 }
 
-/**
- * Revoke token and logout
- */
-async function revokeToken() {
+async function logoutProfile(profileId) {
   try {
-    if (oauth2Client) {
-      await oauth2Client.revokeCredentials();
+    const client = oauthClientsByProfileId.get(profileId) || null;
+    if (client) {
+      await client.revokeCredentials().catch(() => {});
     }
-    await fsPromises.unlink(TOKEN_PATH).catch(() => {});
-    oauth2Client = null;
+    await fsPromises.unlink(tokenPathForProfile(profileId)).catch(() => {});
+    oauthClientsByProfileId.delete(profileId);
     return true;
   } catch (error) {
-    throw new Error(`Failed to revoke token: ${error.message}`);
+    throw new Error(`Failed to logout: ${error.message}`);
   }
 }
 
 /**
- * Reset local OAuth state (delete stored token and credentials).
- * Useful when user saved wrong Client ID/Secret and needs a clean restart.
+ * Reset all local YouTube auth state (delete profiles and tokens).
  */
 async function resetAuth() {
   try {
-    await fsPromises.unlink(TOKEN_PATH).catch(() => {});
-    await fsPromises.unlink(CREDENTIALS_PATH).catch(() => {});
-    oauth2Client = null;
+    await ensureStorage();
+    const { profiles } = await readProfilesFile();
+    for (const p of profiles) {
+      await fsPromises.unlink(tokenPathForProfile(p.id)).catch(() => {});
+    }
+    await writeProfilesFile([]);
+    oauthClientsByProfileId.clear();
     return true;
   } catch (error) {
     throw new Error(`Failed to reset auth: ${error.message}`);
@@ -278,12 +391,15 @@ async function resetAuth() {
 }
 
 module.exports = {
-  authorize,
-  saveCredentials,
-  loadCredentials,
+  init,
+  listProfiles,
+  saveProfile,
+  deleteProfile,
+  authorizeProfile,
   isAuthenticated,
   uploadVideo,
-  revokeToken,
+  fetchAndStoreChannelInfo,
+  logoutProfile,
   resetAuth,
   getNewToken,
 };

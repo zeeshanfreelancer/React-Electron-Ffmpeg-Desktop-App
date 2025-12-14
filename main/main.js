@@ -21,6 +21,7 @@ let currentPanZoomGeneration = {
 // OAuth callback server
 let oauthCallbackServer = null;
 let youtubeAuthWebContents = null;
+let youtubeAuthProfileId = null;
 
 // Helper: Parse subtitle file (SRT or VTT)
 function parseSubtitleFile(content, format) {
@@ -399,23 +400,40 @@ function registerIpcHandlers() {
   });
 
   // 📤 YouTube Upload Handlers
-  // Save YouTube OAuth credentials
-  ipcMain.handle('youtube-save-credentials', async (event, credentials) => {
+  ipcMain.handle('youtube-list-profiles', async () => {
     try {
-      await youtubeUploader.saveCredentials(credentials);
+      const profiles = await youtubeUploader.listProfiles();
+      return { profiles };
+    } catch (error) {
+      throw new Error(`Failed to list profiles: ${error.message}`);
+    }
+  });
+
+  ipcMain.handle('youtube-save-profile', async (event, { id, label, credentials }) => {
+    try {
+      const result = await youtubeUploader.saveProfile({ id, label, credentials });
+      return { success: true, profileId: result.id };
+    } catch (error) {
+      throw new Error(`Failed to save profile: ${error.message}`);
+    }
+  });
+
+  ipcMain.handle('youtube-delete-profile', async (event, profileId) => {
+    try {
+      await youtubeUploader.deleteProfile(profileId);
       return { success: true };
     } catch (error) {
-      throw new Error(`Failed to save credentials: ${error.message}`);
+      throw new Error(`Failed to delete profile: ${error.message}`);
     }
   });
 
   // Check if authenticated
-  ipcMain.handle('youtube-check-auth', async () => {
+  ipcMain.handle('youtube-check-auth', async (event, profileId) => {
     try {
-      const isAuth = await youtubeUploader.isAuthenticated();
-      return { authenticated: isAuth };
+      const isAuth = await youtubeUploader.isAuthenticated(profileId);
+      return { authenticated: isAuth, profileId };
     } catch (error) {
-      return { authenticated: false };
+      return { authenticated: false, profileId };
     }
   });
 
@@ -469,7 +487,11 @@ function registerIpcHandlers() {
 
           // Forward code to the internal auth-code channel used by youtubeUploader
           if (youtubeAuthWebContents && !youtubeAuthWebContents.isDestroyed()) {
-            ipcMain.emit('youtube-auth-code-internal', { sender: youtubeAuthWebContents }, code);
+            if (youtubeAuthProfileId) {
+              ipcMain.emit(`youtube-auth-code-internal:${youtubeAuthProfileId}`, { sender: youtubeAuthWebContents }, code);
+            } else {
+              youtubeAuthWebContents.send('youtube-error', 'No profile selected for authentication.');
+            }
           }
           
           // Stop server after a short delay
@@ -521,21 +543,17 @@ function registerIpcHandlers() {
   }
 
   // Authenticate with YouTube
-  ipcMain.on('youtube-authenticate', async (event) => {
+  ipcMain.on('youtube-authenticate', async (event, profileId) => {
     try {
       youtubeAuthWebContents = event.sender;
-      const credentials = await youtubeUploader.loadCredentials();
-      if (!credentials) {
-        event.sender.send('youtube-error', 'No credentials found. Please set up OAuth credentials first.');
-        return;
-      }
+      youtubeAuthProfileId = profileId;
 
       // If we already have a valid token, treat this as a successful auth and don't re-run the flow.
       // This prevents the UI from feeling like "Authenticate" does nothing when a token already exists.
       try {
-        const alreadyAuthed = await youtubeUploader.isAuthenticated();
+        const alreadyAuthed = await youtubeUploader.isAuthenticated(profileId);
         if (alreadyAuthed) {
-          event.sender.send('youtube-auth-success');
+          event.sender.send('youtube-auth-success', { profileId });
           return;
         }
       } catch (_) {
@@ -552,7 +570,11 @@ function registerIpcHandlers() {
         event.sender.send('youtube-callback-server-failed', serverError.message);
       }
 
-      await youtubeUploader.authorize(credentials, event, ipcMain);
+      await youtubeUploader.authorizeProfile(profileId, event, ipcMain);
+      const channel = await youtubeUploader.fetchAndStoreChannelInfo(profileId);
+      if (channel && event && event.sender) {
+        event.sender.send('youtube-profile-updated', { profileId, channel });
+      }
     } catch (error) {
       stopOAuthCallbackServer();
       if (error.message && !error.message.includes('youtube-auth-code')) {
@@ -561,35 +583,36 @@ function registerIpcHandlers() {
     } finally {
       // Clear reference once flow is done/failed to avoid sending to stale webContents
       youtubeAuthWebContents = null;
+      youtubeAuthProfileId = null;
     }
   });
 
   // Handle auth code from renderer paste (manual entry fallback)
-  ipcMain.on('youtube-auth-code', (event, code) => {
-    ipcMain.emit('youtube-auth-code-internal', event, code);
+  ipcMain.on('youtube-auth-code', (event, { profileId, code }) => {
+    ipcMain.emit(`youtube-auth-code-internal:${profileId}`, event, code);
   });
 
   // Upload video to YouTube
-  ipcMain.on('youtube-upload-video', async (event, { videoPath, metadata }) => {
+  ipcMain.on('youtube-upload-video', async (event, { profileId, videoPath, metadata }) => {
     try {
       const progressCallback = (progress) => {
         event.sender.send('youtube-upload-progress', progress);
       };
 
-      const result = await youtubeUploader.uploadVideo(videoPath, metadata, progressCallback, ipcMain);
+      const result = await youtubeUploader.uploadVideo(profileId, videoPath, metadata, progressCallback, ipcMain);
       event.sender.send('youtube-upload-success', result);
     } catch (error) {
       event.sender.send('youtube-upload-error', error.message);
     }
   });
 
-  // Revoke token and logout
-  ipcMain.handle('youtube-revoke-token', async () => {
+  // Logout selected profile (revoke token)
+  ipcMain.handle('youtube-logout-profile', async (event, profileId) => {
     try {
-      await youtubeUploader.revokeToken();
+      await youtubeUploader.logoutProfile(profileId);
       return { success: true };
     } catch (error) {
-      throw new Error(`Failed to revoke token: ${error.message}`);
+      throw new Error(`Failed to logout: ${error.message}`);
     }
   });
 
@@ -624,6 +647,8 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 app.whenReady().then(() => {
+  // Initialize YouTube profile storage in Electron userData
+  youtubeUploader.init({ storageDir: path.join(app.getPath('userData'), 'youtube') });
   registerIpcHandlers();
   createWindow();
 

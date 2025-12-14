@@ -70,18 +70,22 @@ contextBridge.exposeInMainWorld('electronAPI', {
   },
 
   // YouTube Upload
-  youtubeSaveCredentials: (credentials) => ipcRenderer.invoke('youtube-save-credentials', credentials),
-  youtubeCheckAuth: () => ipcRenderer.invoke('youtube-check-auth'),
-  youtubeAuthenticate: () => ipcRenderer.send('youtube-authenticate'),
-  youtubeUploadVideo: (videoPath, metadata) => ipcRenderer.send('youtube-upload-video', { videoPath, metadata }),
-  youtubeRevokeToken: () => ipcRenderer.invoke('youtube-revoke-token'),
+  youtubeListProfiles: () => ipcRenderer.invoke('youtube-list-profiles'),
+  youtubeSaveProfile: (profile) => ipcRenderer.invoke('youtube-save-profile', profile),
+  youtubeDeleteProfile: (profileId) => ipcRenderer.invoke('youtube-delete-profile', profileId),
+  youtubeCheckAuth: (profileId) => ipcRenderer.invoke('youtube-check-auth', profileId),
+  youtubeAuthenticate: (profileId) => ipcRenderer.send('youtube-authenticate', profileId),
+  youtubeUploadVideo: (profileId, videoPath, metadata) =>
+    ipcRenderer.send('youtube-upload-video', { profileId, videoPath, metadata }),
+  youtubeLogoutProfile: (profileId) => ipcRenderer.invoke('youtube-logout-profile', profileId),
   youtubeResetAuth: () => ipcRenderer.invoke('youtube-reset-auth'),
   youtubeOpenUrl: (url) => ipcRenderer.invoke('youtube-open-url', url),
-  youtubeSendAuthCode: (code) => ipcRenderer.send('youtube-auth-code', code),
+  youtubeSendAuthCode: (profileId, code) => ipcRenderer.send('youtube-auth-code', { profileId, code }),
 
   // YouTube event listeners
-  onYoutubeAuthUrl: (callback) => ipcRenderer.on('youtube-auth-url', (_, url) => callback(url)),
-  onYoutubeAuthSuccess: (callback) => ipcRenderer.on('youtube-auth-success', () => callback()),
+  onYoutubeAuthUrl: (callback) => ipcRenderer.on('youtube-auth-url', (_, payload) => callback(payload)),
+  onYoutubeAuthSuccess: (callback) => ipcRenderer.on('youtube-auth-success', (_, payload) => callback(payload)),
+  onYoutubeProfileUpdated: (callback) => ipcRenderer.on('youtube-profile-updated', (_, payload) => callback(payload)),
   onYoutubeUploadProgress: (callback) => ipcRenderer.on('youtube-upload-progress', (_, progress) => callback(progress)),
   onYoutubeUploadSuccess: (callback) => ipcRenderer.on('youtube-upload-success', (_, result) => callback(result)),
   onYoutubeUploadError: (callback) => ipcRenderer.on('youtube-upload-error', (_, error) => callback(error)),
@@ -91,6 +95,7 @@ contextBridge.exposeInMainWorld('electronAPI', {
   removeYoutubeListeners: () => {
     ipcRenderer.removeAllListeners('youtube-auth-url');
     ipcRenderer.removeAllListeners('youtube-auth-success');
+    ipcRenderer.removeAllListeners('youtube-profile-updated');
     ipcRenderer.removeAllListeners('youtube-upload-progress');
     ipcRenderer.removeAllListeners('youtube-upload-success');
     ipcRenderer.removeAllListeners('youtube-upload-error');

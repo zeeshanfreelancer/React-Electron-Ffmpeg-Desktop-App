@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import './ScrollingTextVideo.css';
 
 function ScrollingTextVideo() {
@@ -73,6 +73,8 @@ function ScrollingTextVideo() {
   const [activeSettingsTab, setActiveSettingsTab] = useState('basic');
 
   // YouTube Upload state
+  const [youtubeProfiles, setYoutubeProfiles] = useState([]);
+  const [selectedYoutubeProfileId, setSelectedYoutubeProfileId] = useState('');
   const [youtubeVideoPath, setYoutubeVideoPath] = useState('');
   const [youtubeTitle, setYoutubeTitle] = useState('');
   const [youtubeDescription, setYoutubeDescription] = useState('');
@@ -85,10 +87,17 @@ function ScrollingTextVideo() {
   const [youtubeUploadProgress, setYoutubeUploadProgress] = useState(0);
   const [youtubeUploadMessage, setYoutubeUploadMessage] = useState('');
   const [youtubeAuthenticated, setYoutubeAuthenticated] = useState(false);
+  const [youtubeProfileLabel, setYoutubeProfileLabel] = useState('');
   const [youtubeCredentials, setYoutubeCredentials] = useState({ clientId: '', clientSecret: '', redirectUri: '' });
   const [showCredentialsForm, setShowCredentialsForm] = useState(false);
   const [youtubeAuthCode, setYoutubeAuthCode] = useState('');
   const [showAuthCodeInput, setShowAuthCodeInput] = useState(false);
+
+  // Avoid stale state inside long-lived IPC listeners
+  const selectedYoutubeProfileIdRef = useRef('');
+  useEffect(() => {
+    selectedYoutubeProfileIdRef.current = selectedYoutubeProfileId;
+  }, [selectedYoutubeProfileId]);
 
   // Pan/Zoom Video Generator state
   const [panZoomImageFolder, setPanZoomImageFolder] = useState('');
@@ -203,19 +212,34 @@ function ScrollingTextVideo() {
 
   // YouTube Upload useEffect
   useEffect(() => {
-    // Check authentication status on mount
-    checkYoutubeAuth();
+    // Load profiles and auth status on mount
+    refreshYoutubeProfiles();
 
     // Set up YouTube event listeners
-    window.electronAPI.onYoutubeAuthUrl((url) => {
+    window.electronAPI.onYoutubeAuthUrl((payload) => {
+      const url = payload && payload.url ? payload.url : payload;
+      const profileId = payload && payload.profileId ? payload.profileId : '';
+      if (profileId) {
+        setSelectedYoutubeProfileId(profileId);
+      }
       window.electronAPI.youtubeOpenUrl(url);
       setShowAuthCodeInput(true);
       setStatus('🔐 Please authorize the app in your browser. After authorization, copy the code from the URL and paste it below.');
     });
 
-    window.electronAPI.onYoutubeAuthSuccess(() => {
+    window.electronAPI.onYoutubeAuthSuccess(async (payload) => {
+      const profileId = payload && payload.profileId ? payload.profileId : '';
+      if (profileId) {
+        setSelectedYoutubeProfileId(profileId);
+      }
       setYoutubeAuthenticated(true);
       setStatus('✅ Successfully authenticated with YouTube!');
+      await refreshYoutubeProfiles(profileId);
+    });
+
+    window.electronAPI.onYoutubeProfileUpdated(async (payload) => {
+      const profileId = payload && payload.profileId ? payload.profileId : '';
+      await refreshYoutubeProfiles(profileId);
     });
 
     window.electronAPI.onYoutubeUploadProgress((progressData) => {
@@ -288,13 +312,55 @@ function ScrollingTextVideo() {
     };
   }, []);
 
-  const checkYoutubeAuth = async () => {
+  const refreshYoutubeProfiles = async (preferredProfileId = '') => {
     try {
-      const result = await window.electronAPI.youtubeCheckAuth();
-      setYoutubeAuthenticated(result.authenticated);
+      const result = await window.electronAPI.youtubeListProfiles();
+      const profiles = result && Array.isArray(result.profiles) ? result.profiles : [];
+      setYoutubeProfiles(profiles);
+
+      const currentSelected = selectedYoutubeProfileIdRef.current;
+      const nextSelected =
+        (preferredProfileId && profiles.some(p => p.id === preferredProfileId) && preferredProfileId) ||
+        (currentSelected && profiles.some(p => p.id === currentSelected) && currentSelected) ||
+        (profiles[0] ? profiles[0].id : '');
+
+      setSelectedYoutubeProfileId(nextSelected);
+      if (nextSelected) {
+        await checkYoutubeAuth(nextSelected);
+      } else {
+        setYoutubeAuthenticated(false);
+      }
+    } catch (error) {
+      setYoutubeProfiles([]);
+      setSelectedYoutubeProfileId('');
+      setYoutubeAuthenticated(false);
+    }
+  };
+
+  const checkYoutubeAuth = async (profileId) => {
+    try {
+      if (!profileId) {
+        setYoutubeAuthenticated(false);
+        return;
+      }
+      const result = await window.electronAPI.youtubeCheckAuth(profileId);
+      setYoutubeAuthenticated(Boolean(result && result.authenticated));
     } catch (error) {
       setYoutubeAuthenticated(false);
     }
+  };
+
+  const handleYoutubeSelectProfile = async (profileId) => {
+    setSelectedYoutubeProfileId(profileId);
+    setShowAuthCodeInput(false);
+    setYoutubeAuthCode('');
+    setShowCredentialsForm(false);
+    setYoutubeAuthenticated(false);
+
+    const p = youtubeProfiles.find(x => x.id === profileId) || null;
+    setYoutubeProfileLabel(p && p.label ? p.label : '');
+
+    await checkYoutubeAuth(profileId);
   };
 
   const handleSelectYoutubeVideo = async () => {
@@ -333,8 +399,14 @@ function ScrollingTextVideo() {
           redirect_uris: [redirectUri],
         },
       };
-      await window.electronAPI.youtubeSaveCredentials(credentials);
-      setStatus('✅ Credentials saved successfully! Make sure the redirect URI in Google Cloud Console matches exactly: ' + redirectUri);
+      const result = await window.electronAPI.youtubeSaveProfile({
+        id: selectedYoutubeProfileId || undefined,
+        label: youtubeProfileLabel.trim(),
+        credentials,
+      });
+      const profileId = result && result.profileId ? result.profileId : '';
+      await refreshYoutubeProfiles(profileId);
+      setStatus('✅ Profile saved! Make sure the redirect URI in Google Cloud Console matches exactly: ' + redirectUri);
       setShowCredentialsForm(false);
     } catch (error) {
       setStatus(`❌ Failed to save credentials: ${error.message}`);
@@ -342,9 +414,13 @@ function ScrollingTextVideo() {
   };
 
   const handleYoutubeAuthenticate = () => {
+    if (!selectedYoutubeProfileId) {
+      setStatus('❌ Please create/select a YouTube profile first');
+      return;
+    }
     setShowAuthCodeInput(false);
     setYoutubeAuthCode('');
-    window.electronAPI.youtubeAuthenticate();
+    window.electronAPI.youtubeAuthenticate(selectedYoutubeProfileId);
   };
 
   const handleYoutubeAuthCodeSubmit = () => {
@@ -369,14 +445,24 @@ function ScrollingTextVideo() {
       return;
     }
     
-    window.electronAPI.youtubeSendAuthCode(code);
+    if (!selectedYoutubeProfileId) {
+      setStatus('❌ Please create/select a YouTube profile first');
+      return;
+    }
+
+    setStatus('⏳ Verifying authorization code...');
+    window.electronAPI.youtubeSendAuthCode(selectedYoutubeProfileId, code);
     setShowAuthCodeInput(false);
     setYoutubeAuthCode('');
   };
 
   const handleYoutubeLogout = async () => {
     try {
-      await window.electronAPI.youtubeRevokeToken();
+      if (!selectedYoutubeProfileId) {
+        setStatus('❌ Please select a YouTube profile first');
+        return;
+      }
+      await window.electronAPI.youtubeLogoutProfile(selectedYoutubeProfileId);
       setYoutubeAuthenticated(false);
       setStatus('✅ Logged out successfully');
     } catch (error) {
@@ -385,7 +471,7 @@ function ScrollingTextVideo() {
   };
 
   const handleYoutubeResetAuth = async () => {
-    const ok = window.confirm('This will delete the saved YouTube token + credentials on this computer. Continue?');
+    const ok = window.confirm('This will delete ALL saved YouTube profiles and tokens on this computer. Continue?');
     if (!ok) return;
     try {
       await window.electronAPI.youtubeResetAuth();
@@ -393,10 +479,30 @@ function ScrollingTextVideo() {
       setShowCredentialsForm(false);
       setShowAuthCodeInput(false);
       setYoutubeAuthCode('');
+      setYoutubeProfiles([]);
+      setSelectedYoutubeProfileId('');
+      setYoutubeProfileLabel('');
       setYoutubeCredentials({ clientId: '', clientSecret: '', redirectUri: '' });
-      setStatus('✅ OAuth reset. Please set up credentials again, then authenticate.');
+      setStatus('✅ YouTube profiles reset. Please create a profile and authenticate again.');
     } catch (error) {
       setStatus(`❌ Failed to reset OAuth: ${error.message}`);
+    }
+  };
+
+  const handleYoutubeDeleteProfile = async () => {
+    if (!selectedYoutubeProfileId) {
+      setStatus('❌ Please select a YouTube profile first');
+      return;
+    }
+    const ok = window.confirm('Delete the selected YouTube profile and its token from this computer?');
+    if (!ok) return;
+    try {
+      await window.electronAPI.youtubeDeleteProfile(selectedYoutubeProfileId);
+      setYoutubeAuthenticated(false);
+      await refreshYoutubeProfiles('');
+      setStatus('✅ Profile deleted');
+    } catch (error) {
+      setStatus(`❌ Failed to delete profile: ${error.message}`);
     }
   };
 
@@ -431,6 +537,10 @@ function ScrollingTextVideo() {
   };
 
   const handleYoutubeUpload = () => {
+    if (!selectedYoutubeProfileId) {
+      setStatus('❌ Please select a YouTube profile/channel first');
+      return;
+    }
     if (!youtubeVideoPath) {
       setStatus('❌ Please select a video file');
       return;
@@ -487,7 +597,7 @@ function ScrollingTextVideo() {
       metadata.publishAt = publishAtIso;
     }
 
-    window.electronAPI.youtubeUploadVideo(youtubeVideoPath, metadata);
+    window.electronAPI.youtubeUploadVideo(selectedYoutubeProfileId, youtubeVideoPath, metadata);
   };
 
 
@@ -872,6 +982,8 @@ function ScrollingTextVideo() {
     { value: 'facebook', label: 'Facebook (16:9)' },
     { value: 'twitter', label: 'Twitter (16:9)' },
   ];
+
+  const selectedYoutubeProfile = youtubeProfiles.find(p => p.id === selectedYoutubeProfileId) || null;
 
   return (
     <div className="scrolling-video-container">
@@ -1864,39 +1976,92 @@ function ScrollingTextVideo() {
             {/* Authentication Section */}
             <div className="form-group" style={{ marginBottom: '20px', padding: '15px', backgroundColor: '#f5f5f5', borderRadius: '8px' }}>
               <h3 style={{ marginTop: 0 }}>🔐 Authentication</h3>
-              {youtubeAuthenticated ? (
-                <div>
-                  <p style={{ color: 'green', marginBottom: '10px' }}>✅ Authenticated with YouTube</p>
-                  <button onClick={handleYoutubeLogout} className="small-btn" style={{ backgroundColor: '#dc3545' }}>
-                    🚪 Logout
+              <div className="form-group" style={{ marginBottom: '12px' }}>
+                <label>Channel Profile</label>
+                <div className="input-with-button">
+                  <select
+                    value={selectedYoutubeProfileId}
+                    onChange={(e) => handleYoutubeSelectProfile(e.target.value)}
+                    disabled={isYoutubeUploading}
+                    style={{ flex: 1, padding: '8px' }}
+                  >
+                    <option value="">-- Select or create a profile --</option>
+                    {youtubeProfiles.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {(p.channel && p.channel.title) ? p.channel.title : (p.label || p.id)}
+                      </option>
+                    ))}
+                  </select>
+                  <button
+                    onClick={() => {
+                      setSelectedYoutubeProfileId('');
+                      setYoutubeProfileLabel('');
+                      setYoutubeCredentials({ clientId: '', clientSecret: '', redirectUri: '' });
+                      setShowCredentialsForm(true);
+                      setShowAuthCodeInput(false);
+                      setYoutubeAuthCode('');
+                      setYoutubeAuthenticated(false);
+                    }}
+                    className="small-btn"
+                    disabled={isYoutubeUploading}
+                    style={{ marginLeft: '10px' }}
+                  >
+                    ➕ New
+                  </button>
+                  <button
+                    onClick={handleYoutubeDeleteProfile}
+                    className="small-btn"
+                    disabled={isYoutubeUploading || !selectedYoutubeProfileId}
+                    style={{ marginLeft: '10px', backgroundColor: '#dc3545' }}
+                  >
+                    🗑️ Delete
                   </button>
                 </div>
+                <small style={{ color: '#666', fontSize: '11px' }}>
+                  Each profile stores its own token, so you can upload to multiple YouTube channels by switching profiles.
+                </small>
+              </div>
+
+              {selectedYoutubeProfileId ? (
+                <p style={{ color: youtubeAuthenticated ? 'green' : '#666', marginBottom: '10px' }}>
+                  {youtubeAuthenticated
+                    ? `✅ Authenticated${selectedYoutubeProfile?.channel?.title ? ` as ${selectedYoutubeProfile.channel.title}` : ''}`
+                    : 'Not authenticated'}
+                </p>
               ) : (
-                <div>
-                  <p style={{ color: '#666', marginBottom: '10px' }}>Not authenticated</p>
-                  <div style={{ marginBottom: '15px' }}>
-                    <button
-                      onClick={() => setShowCredentialsForm(!showCredentialsForm)}
-                      className="small-btn"
-                      style={{ marginRight: '10px' }}
-                    >
-                      {showCredentialsForm ? '❌ Cancel' : '⚙️ Setup Credentials'}
-                    </button>
-                    <button
-                      onClick={handleYoutubeResetAuth}
-                      className="small-btn"
-                      style={{ marginRight: '10px', backgroundColor: '#6c757d' }}
-                      disabled={isYoutubeUploading}
-                    >
-                      🧹 Reset OAuth
-                    </button>
-                    {!showCredentialsForm && !showAuthCodeInput && (
-                      <button onClick={handleYoutubeAuthenticate} className="small-btn" style={{ backgroundColor: '#28a745' }}>
-                        🔑 Authenticate
-                      </button>
-                    )}
-                  </div>
-                  {showAuthCodeInput && (
+                <p style={{ color: '#666', marginBottom: '10px' }}>Select or create a profile to authenticate.</p>
+              )}
+
+              <div style={{ marginBottom: '15px' }}>
+                <button
+                  onClick={() => setShowCredentialsForm(!showCredentialsForm)}
+                  className="small-btn"
+                  style={{ marginRight: '10px' }}
+                  disabled={isYoutubeUploading}
+                >
+                  {showCredentialsForm ? '❌ Cancel' : (selectedYoutubeProfileId ? '⚙️ Edit Profile Credentials' : '⚙️ Setup Profile')}
+                </button>
+                <button
+                  onClick={handleYoutubeResetAuth}
+                  className="small-btn"
+                  style={{ marginRight: '10px', backgroundColor: '#6c757d' }}
+                  disabled={isYoutubeUploading}
+                >
+                  🧹 Reset All Profiles
+                </button>
+                {youtubeAuthenticated && (
+                  <button onClick={handleYoutubeLogout} className="small-btn" style={{ marginRight: '10px', backgroundColor: '#dc3545' }}>
+                    🚪 Logout
+                  </button>
+                )}
+                {!youtubeAuthenticated && !showCredentialsForm && !showAuthCodeInput && selectedYoutubeProfileId && (
+                  <button onClick={handleYoutubeAuthenticate} className="small-btn" style={{ backgroundColor: '#28a745' }}>
+                    🔑 Authenticate
+                  </button>
+                )}
+              </div>
+
+              {showAuthCodeInput && (
                     <div style={{ padding: '15px', backgroundColor: 'white', borderRadius: '5px', marginTop: '10px' }}>
                       <div style={{ fontSize: '12px', color: '#666', marginBottom: '15px', padding: '10px', backgroundColor: '#e7f3ff', borderRadius: '5px' }}>
                         <strong>📋 Instructions:</strong>
@@ -1940,6 +2105,7 @@ function ScrollingTextVideo() {
                       </button>
                     </div>
                   )}
+
                   {showCredentialsForm && (
                     <div style={{ padding: '15px', backgroundColor: 'white', borderRadius: '5px', marginTop: '10px' }}>
                       <div style={{ fontSize: '12px', color: '#666', marginBottom: '15px', padding: '10px', backgroundColor: '#fff3cd', borderRadius: '5px', border: '1px solid #ffc107' }}>
@@ -1970,6 +2136,16 @@ function ScrollingTextVideo() {
                             <li>Verify redirect URI matches exactly: <code>http://localhost</code></li>
                           </ul>
                         </div>
+                      </div>
+                      <div className="form-group">
+                        <label>Profile Name (optional)</label>
+                        <input
+                          type="text"
+                          value={youtubeProfileLabel}
+                          onChange={(e) => setYoutubeProfileLabel(e.target.value)}
+                          placeholder="e.g., My Channel 1"
+                          style={{ width: '100%', padding: '8px' }}
+                        />
                       </div>
                       <div className="form-group">
                         <label>Client ID *</label>
@@ -2009,8 +2185,6 @@ function ScrollingTextVideo() {
                       </button>
                     </div>
                   )}
-                </div>
-              )}
             </div>
 
             {/* Video Selection */}
@@ -2121,6 +2295,7 @@ function ScrollingTextVideo() {
               onClick={handleYoutubeUpload}
               disabled={
                 isYoutubeUploading ||
+                !selectedYoutubeProfileId ||
                 !youtubeAuthenticated ||
                 !youtubeVideoPath ||
                 !youtubeTitle.trim() ||
