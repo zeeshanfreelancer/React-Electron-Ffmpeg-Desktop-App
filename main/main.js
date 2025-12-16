@@ -146,10 +146,34 @@ function createWindow() {
   // Completely remove the menu bar
   win.setMenu(null);
 
-  const startUrl =
-    process.env.ELECTRON_START_URL ||
-    `file://${path.join(__dirname, '/client/dist/index.html')}`;
-  win.loadURL(startUrl);
+  // Helpful diagnostics if the renderer fails to load (common cause of "blank window" in packaged apps)
+  win.webContents.on('did-fail-load', async (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
+    if (!isMainFrame) return;
+    console.error('Renderer failed to load:', { errorCode, errorDescription, validatedURL });
+    try {
+      await win.loadURL(
+        `data:text/html;charset=utf-8,` +
+          encodeURIComponent(
+            `<h2>App failed to load</h2>
+             <p><b>${errorDescription}</b> (code: ${errorCode})</p>
+             <p>URL: ${validatedURL}</p>
+             <p>Open DevTools (Ctrl+Shift+I) to see logs.</p>`
+          )
+      );
+    } catch (_) {
+      // ignore
+    }
+  });
+
+  // Dev: load Vite server. Prod: load the built file from client/dist.
+  const devUrl = process.env.ELECTRON_START_URL;
+  if (devUrl) {
+    win.loadURL(devUrl);
+  } else {
+    // app.getAppPath() points to the app root (inside app.asar when packaged)
+    const indexPath = path.join(app.getAppPath(), 'client', 'dist', 'index.html');
+    win.loadFile(indexPath);
+  }
 }
 
 function registerIpcHandlers() {
