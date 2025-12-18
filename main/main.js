@@ -18,6 +18,11 @@ let currentPanZoomGeneration = {
   webContents: null,
 };
 
+let currentEffectGeneration = {
+  cancelled: false,
+  webContents: null,
+};
+
 // OAuth callback server
 let oauthCallbackServer = null;
 let youtubeAuthWebContents = null;
@@ -430,6 +435,47 @@ function registerIpcHandlers() {
     currentPanZoomGeneration.cancelled = true;
     if (currentPanZoomGeneration.webContents) {
       currentPanZoomGeneration.webContents.send('panzoom-video-cancelled');
+    }
+  });
+
+  // ✨ Effect Generator Handlers (reuses Pan/Zoom generator with transitions/effect presets)
+  ipcMain.on('generate-effect-video', async (event, options) => {
+    // Reset cancellation flag
+    currentEffectGeneration.cancelled = false;
+    currentEffectGeneration.webContents = event.sender;
+
+    try {
+      const progressCallback = (progress) => {
+        if (currentEffectGeneration.cancelled) {
+          throw new Error('Video generation cancelled');
+        }
+        event.sender.send('effect-video-progress', progress);
+      };
+
+      const shouldCancel = () => currentEffectGeneration.cancelled;
+
+      const result = await generatePanZoomVideo(options, progressCallback, shouldCancel);
+      if (!currentEffectGeneration.cancelled) {
+        event.sender.send('effect-video-done', result);
+      }
+    } catch (error) {
+      if (!currentEffectGeneration.cancelled) {
+        event.sender.send('effect-video-error', error.message);
+      } else {
+        event.sender.send('effect-video-cancelled');
+      }
+    } finally {
+      // Reset state
+      currentEffectGeneration.cancelled = false;
+      currentEffectGeneration.webContents = null;
+    }
+  });
+
+  // 🚫 Cancel effect video generation
+  ipcMain.on('cancel-effect-video', () => {
+    currentEffectGeneration.cancelled = true;
+    if (currentEffectGeneration.webContents) {
+      currentEffectGeneration.webContents.send('effect-video-cancelled');
     }
   });
 

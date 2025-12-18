@@ -29,7 +29,26 @@ async function generatePanZoomVideo(options, progressCallback, shouldCancel) {
     zoomMagnitude = 0.05,
     panMagnitude = 30,
     backgroundMusic = null,
+    transition = null, // { type, duration }
+    effectPreset = 'custom', // custom, none, smooth, cinematic, shake, zoom, pan
   } = options;
+
+  // Resolve effect preset -> magnitudes (Effect Generator tab uses this)
+  const presetMap = {
+    none: { shakeMagnitude: 0, zoomMagnitude: 0, panMagnitude: 0 },
+    smooth: { shakeMagnitude: 1, zoomMagnitude: 0.03, panMagnitude: 15 },
+    cinematic: { shakeMagnitude: 0.5, zoomMagnitude: 0.05, panMagnitude: 20 },
+    shake: { shakeMagnitude: 5, zoomMagnitude: 0.02, panMagnitude: 10 },
+    zoom: { shakeMagnitude: 0, zoomMagnitude: 0.08, panMagnitude: 0 },
+    pan: { shakeMagnitude: 0, zoomMagnitude: 0.02, panMagnitude: 40 },
+  };
+
+  const resolvedMagnitudes = presetMap[effectPreset] || null;
+  const resolvedShake = resolvedMagnitudes ? resolvedMagnitudes.shakeMagnitude : shakeMagnitude;
+  const resolvedZoom = resolvedMagnitudes ? resolvedMagnitudes.zoomMagnitude : zoomMagnitude;
+  const resolvedPan = resolvedMagnitudes ? resolvedMagnitudes.panMagnitude : panMagnitude;
+
+  const resolvedTransition = transition && typeof transition === 'object' ? transition : { type: 'none', duration: 0 };
 
   // Validate inputs
   if (!imageFolder || !outputFolder) {
@@ -86,9 +105,10 @@ async function generatePanZoomVideo(options, progressCallback, shouldCancel) {
       videoHeight,
       fps,
       imageDuration,
-      shakeMagnitude,
-      zoomMagnitude,
-      panMagnitude,
+      resolvedShake,
+      resolvedZoom,
+      resolvedPan,
+      resolvedTransition,
       backgroundMusic,
       progressCallback,
       shouldCancel
@@ -116,6 +136,7 @@ async function createVideoFromImages(
   shakeMagnitude,
   zoomMagnitude,
   panMagnitude,
+  transition,
   backgroundMusic,
   progressCallback,
   shouldCancel
@@ -126,14 +147,30 @@ async function createVideoFromImages(
   try {
     const totalFrames = Math.ceil(imageDuration * fps);
     let frameIndex = 0;
-    const totalFramesToGenerate = imagePaths.length * totalFrames;
+    
+    // Transition config (applied between images within a video)
+    const transitionType = transition && transition.type ? String(transition.type) : 'none';
+    const transitionDuration = transition && typeof transition.duration === 'number' ? transition.duration : parseFloat(transition?.duration || 0);
+    const transitionFramesRaw = Math.ceil((Number.isFinite(transitionDuration) ? transitionDuration : 0) * fps);
+    const transitionFrames =
+      transitionType === 'none'
+        ? 0
+        : Math.max(0, Math.min(transitionFramesRaw, Math.max(0, totalFrames - 1)));
 
-    // Process each image
-    for (let imgIndex = 0; imgIndex < imagePaths.length; imgIndex++) {
-      const imagePath = imagePaths[imgIndex];
-      
-      // Load image once per image (not per frame)
-      const image = await loadImage(imagePath);
+    // For overlap transitions (crossfade/slide/wipe) we skip the first transitionFrames of every image after the first
+    const totalFramesToGenerate =
+      imagePaths.length * totalFrames - (imagePaths.length > 1 ? (imagePaths.length - 1) * transitionFrames : 0);
+
+    const seededRandom01 = (seed) => {
+      // Deterministic 0..1 pseudo-random from a numeric seed
+      const x = Math.sin(seed) * 10000;
+      return x - Math.floor(x);
+    };
+
+    const easeInOutCubic = (x) =>
+      x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
+
+    const drawImageWithEffects = (ctx, image, t, seedBase, extraTransform) => {
       const imgWidth = image.width;
       const imgHeight = image.height;
 
@@ -141,74 +178,140 @@ async function createVideoFromImages(
       const baseScaleX = videoWidth / imgWidth;
       const baseScaleY = videoHeight / imgHeight;
       const baseScale = Math.max(baseScaleX, baseScaleY);
-      
-      // Add extra room for zoom and pan effects
-      // The zoom oscillates from 1 (no zoom) to 1+zoomMagnitude (max zoom)
-      // Problem: At zoom=1, we want image to fit video (or be slightly larger)
-      // Current: scale = baseScale * (1 + zoomMagnitude + panPadding)
-      // At zoom=1: currentScaledWidth = scaledWidth * 1 = imgWidth * baseScale * (1 + zoomMagnitude + panPadding)
-      // This is too large!
-      //
-      // Fix: Reduce the scale multiplier so at zoom=1, image fits better
-      // Convert pan magnitude to scale factor (pan pixels relative to video size)
-      const panPadding = Math.max(panMagnitude * 2 / Math.min(videoWidth, videoHeight), 0.05);
-      // Use smaller multiplier: at zoom=1, image will be baseScale * (1 + small padding)
-      // At zoom=1+zoomMagnitude, it will zoom in
+
+      // Add padding to allow pan and zoom
+      const panPadding = Math.max((panMagnitude * 2) / Math.min(videoWidth, videoHeight), 0.05);
       const scale = baseScale * (1 + panPadding * 0.3 + zoomMagnitude * 0.2);
 
       const scaledWidth = imgWidth * scale;
       const scaledHeight = imgHeight * scale;
 
+      // Compute effects
+      const zoom = 1 + zoomMagnitude * Math.sin((2 * Math.PI * t) / imageDuration);
+      const panX = panMagnitude * Math.sin((2 * Math.PI * t) / imageDuration);
+      const panY = panMagnitude * Math.cos((2 * Math.PI * t) / imageDuration);
+
+      // Deterministic shake per-frame
+      const shakeX = (seededRandom01(seedBase + t * 1000 + 1) * 2 - 1) * shakeMagnitude;
+      const shakeY = (seededRandom01(seedBase + t * 1000 + 2) * 2 - 1) * shakeMagnitude;
+
+      const currentScaledWidth = scaledWidth * zoom;
+      const currentScaledHeight = scaledHeight * zoom;
+
+      // Center and crop
+      const centerX = currentScaledWidth / 2;
+      const centerY = currentScaledHeight / 2;
+      const cropX = centerX - videoWidth / 2 + panX + shakeX;
+      const cropY = centerY - videoHeight / 2 + panY + shakeY;
+      const x1 = Math.max(0, Math.min(cropX, currentScaledWidth - videoWidth));
+      const y1 = Math.max(0, Math.min(cropY, currentScaledHeight - videoHeight));
+
+      ctx.save();
+      if (extraTransform && (extraTransform.dx || extraTransform.dy)) {
+        ctx.translate(extraTransform.dx || 0, extraTransform.dy || 0);
+      }
+      ctx.translate(-x1, -y1);
+      ctx.drawImage(image, 0, 0, currentScaledWidth, currentScaledHeight);
+      ctx.restore();
+    };
+
+    // Process each image
+    for (let imgIndex = 0; imgIndex < imagePaths.length; imgIndex++) {
+      const imagePath = imagePaths[imgIndex];
+      
+      // Load image once per image (not per frame)
+      const image = await loadImage(imagePath);
+      const nextImage = (transitionFrames > 0 && imgIndex < imagePaths.length - 1)
+        ? await loadImage(imagePaths[imgIndex + 1])
+        : null;
+
       // Generate frames for this image
       const framePromises = [];
       const batchSize = 10; // Process frames in batches
-
-      for (let frame = 0; frame < totalFrames; frame++) {
+      const frameStart = imgIndex === 0 ? 0 : transitionFrames;
+      for (let frame = frameStart; frame < totalFrames; frame++) {
         if (shouldCancel && shouldCancel()) {
           throw new Error('Video generation cancelled');
         }
 
         const t = frame / fps;
         const currentFrameIndex = frameIndex;
+        const isInTransition =
+          transitionFrames > 0 &&
+          imgIndex < imagePaths.length - 1 &&
+          frame >= (totalFrames - transitionFrames);
+        const rawProgress = isInTransition ? (frame - (totalFrames - transitionFrames)) / transitionFrames : 0;
+        const p = isInTransition ? easeInOutCubic(Math.min(1, Math.max(0, rawProgress))) : 0;
 
         // Generate frame asynchronously
         const framePromise = (async () => {
-          // Calculate effects
-          // Zoom oscillates from 1 (no zoom) to 1+zoomMagnitude (max zoom)
-          const zoom = 1 + zoomMagnitude * Math.sin(2 * Math.PI * t / imageDuration);
-          const panX = panMagnitude * Math.sin(2 * Math.PI * t / imageDuration);
-          const panY = panMagnitude * Math.cos(2 * Math.PI * t / imageDuration);
-          const shakeX = (Math.random() * 2 - 1) * shakeMagnitude;
-          const shakeY = (Math.random() * 2 - 1) * shakeMagnitude;
-
-          // Apply zoom to the scaled dimensions
-          const currentScaledWidth = scaledWidth * zoom;
-          const currentScaledHeight = scaledHeight * zoom;
-          
-          // Calculate center position of the zoomed image
-          const centerX = currentScaledWidth / 2;
-          const centerY = currentScaledHeight / 2;
-          
-          // Calculate offset from center (pan + shake)
-          const offsetX = panX + shakeX;
-          const offsetY = panY + shakeY;
-          
-          // Calculate crop position (top-left corner of visible area)
-          // Start from center, then offset by pan/shake
-          const cropX = centerX - videoWidth / 2 + offsetX;
-          const cropY = centerY - videoHeight / 2 + offsetY;
-          
-          // Clamp to ensure we don't go outside image bounds
-          const x1 = Math.max(0, Math.min(cropX, currentScaledWidth - videoWidth));
-          const y1 = Math.max(0, Math.min(cropY, currentScaledHeight - videoHeight));
-
-          // Create canvas and draw
           const canvas = new Canvas(videoWidth, videoHeight);
           const ctx = canvas.getContext('2d');
-          ctx.save();
-          ctx.translate(-x1, -y1);
-          ctx.drawImage(image, 0, 0, currentScaledWidth, currentScaledHeight);
-          ctx.restore();
+
+          // Black background
+          ctx.fillStyle = '#000000';
+          ctx.fillRect(0, 0, videoWidth, videoHeight);
+
+          if (!isInTransition || transitionType === 'none' || !nextImage) {
+            drawImageWithEffects(ctx, image, t, imgIndex * 100000 + frame, null);
+          } else {
+            // Draw current image
+            if (transitionType === 'crossfade') {
+              ctx.save();
+              ctx.globalAlpha = 1 - p;
+              drawImageWithEffects(ctx, image, t, imgIndex * 100000 + frame, null);
+              ctx.restore();
+
+              ctx.save();
+              ctx.globalAlpha = p;
+              const t2 = (frame - (totalFrames - transitionFrames)) / fps;
+              drawImageWithEffects(ctx, nextImage, t2, (imgIndex + 1) * 100000 + frame, null);
+              ctx.restore();
+            } else if (transitionType === 'slide-left' || transitionType === 'slide-right') {
+              drawImageWithEffects(ctx, image, t, imgIndex * 100000 + frame, null);
+              const t2 = (frame - (totalFrames - transitionFrames)) / fps;
+              const dx = (transitionType === 'slide-left' ? 1 : -1) * (1 - p) * videoWidth;
+              drawImageWithEffects(ctx, nextImage, t2, (imgIndex + 1) * 100000 + frame, { dx, dy: 0 });
+            } else if (transitionType.startsWith('wipe-')) {
+              drawImageWithEffects(ctx, image, t, imgIndex * 100000 + frame, null);
+              const t2 = (frame - (totalFrames - transitionFrames)) / fps;
+
+              ctx.save();
+              if (transitionType === 'wipe-left') {
+                ctx.beginPath();
+                ctx.rect(0, 0, p * videoWidth, videoHeight);
+                ctx.clip();
+              } else if (transitionType === 'wipe-right') {
+                const w = p * videoWidth;
+                ctx.beginPath();
+                ctx.rect(videoWidth - w, 0, w, videoHeight);
+                ctx.clip();
+              } else if (transitionType === 'wipe-up') {
+                const h = p * videoHeight;
+                ctx.beginPath();
+                ctx.rect(0, videoHeight - h, videoWidth, h);
+                ctx.clip();
+              } else if (transitionType === 'wipe-down') {
+                const h = p * videoHeight;
+                ctx.beginPath();
+                ctx.rect(0, 0, videoWidth, h);
+                ctx.clip();
+              }
+              drawImageWithEffects(ctx, nextImage, t2, (imgIndex + 1) * 100000 + frame, null);
+              ctx.restore();
+            } else {
+              // Unknown transition type => fallback to crossfade
+              ctx.save();
+              ctx.globalAlpha = 1 - p;
+              drawImageWithEffects(ctx, image, t, imgIndex * 100000 + frame, null);
+              ctx.restore();
+              ctx.save();
+              ctx.globalAlpha = p;
+              const t2 = (frame - (totalFrames - transitionFrames)) / fps;
+              drawImageWithEffects(ctx, nextImage, t2, (imgIndex + 1) * 100000 + frame, null);
+              ctx.restore();
+            }
+          }
 
           // Save as JPEG (much faster than PNG)
           const frameFileName = `frame${String(currentFrameIndex).padStart(6, '0')}.jpg`;

@@ -30,6 +30,10 @@ contextBridge.exposeInMainWorld('electronAPI', {
   generatePanZoomVideo: (options) => ipcRenderer.send('generate-panzoom-video', options),
   cancelPanZoomVideo: () => ipcRenderer.send('cancel-panzoom-video'),
 
+  // Effect generator
+  generateEffectVideo: (options) => ipcRenderer.send('generate-effect-video', options),
+  cancelEffectVideo: () => ipcRenderer.send('cancel-effect-video'),
+
   // Preview
   generatePreviewFrame: (options, frameTime) => ipcRenderer.invoke('generate-preview-frame', options, frameTime),
 
@@ -55,6 +59,16 @@ contextBridge.exposeInMainWorld('electronAPI', {
   onPanZoomVideoCancelled: (callback) =>
     ipcRenderer.on('panzoom-video-cancelled', () => callback()),
 
+  // Effect generator event listeners
+  onEffectVideoProgress: (callback) =>
+    ipcRenderer.on('effect-video-progress', (_, progress) => callback(progress)),
+  onEffectVideoDone: (callback) =>
+    ipcRenderer.on('effect-video-done', (_, result) => callback(result)),
+  onEffectVideoError: (callback) =>
+    ipcRenderer.on('effect-video-error', (_, err) => callback(err)),
+  onEffectVideoCancelled: (callback) =>
+    ipcRenderer.on('effect-video-cancelled', () => callback()),
+
   // Cleanup listeners
   removeScrollingVideoListeners: () => {
     ipcRenderer.removeAllListeners('scrolling-video-progress');
@@ -68,6 +82,13 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.removeAllListeners('panzoom-video-done');
     ipcRenderer.removeAllListeners('panzoom-video-error');
     ipcRenderer.removeAllListeners('panzoom-video-cancelled');
+  },
+
+  removeEffectVideoListeners: () => {
+    ipcRenderer.removeAllListeners('effect-video-progress');
+    ipcRenderer.removeAllListeners('effect-video-done');
+    ipcRenderer.removeAllListeners('effect-video-error');
+    ipcRenderer.removeAllListeners('effect-video-cancelled');
   },
 
   // YouTube Upload
