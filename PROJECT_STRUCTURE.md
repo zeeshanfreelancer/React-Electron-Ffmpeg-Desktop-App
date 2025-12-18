@@ -27,8 +27,17 @@ slideshow-generator/
     │   ├── 📄 main.jsx                 # React entry point
     │   ├── 📄 App.jsx                  # ⭐ Main app with tab navigation
     │   ├── 📄 App.css                  # ⭐ App styling
-    │   ├── 📄 ScrollingTextVideo.jsx   # ⭐ Scrolling video UI component
-    │   └── 📄 ScrollingTextVideo.css   # ⭐ Component styling
+    │   ├── 📄 ScrollingTextVideo.jsx   # Re-export wrapper (keeps legacy import path stable)
+    │   ├── 📄 ScrollingTextVideo.css   # Component styling (shared by Studio feature)
+    │   └── 📁 features/
+    │       └── 📁 studio/
+    │           ├── 📄 Studio.jsx       # ⭐ Main Studio container (state + IPC wiring)
+    │           ├── 📄 StudioContext.jsx
+    │           └── 📁 tabs/            # Extracted UI blocks (no behavior change)
+    │               ├── 📄 AdvancedTab.jsx
+    │               ├── 📄 PanZoomTab.jsx
+    │               ├── 📄 EffectsTab.jsx
+    │               └── 📄 UploaderTab.jsx
     │
     └── 📁 public/
         └── 📄 vite.svg                 # Vite logo
