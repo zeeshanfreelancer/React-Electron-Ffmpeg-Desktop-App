@@ -37,6 +37,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // Preview
   generatePreviewFrame: (options, frameTime) => ipcRenderer.invoke('generate-preview-frame', options, frameTime),
 
+  // TTS voices (system voices)
+  listTtsVoices: () => ipcRenderer.invoke('list-tts-voices'),
+
   // Event listeners
   onScrollingVideoProgress: (callback) =>
     ipcRenderer.on('scrolling-video-progress', (_, progress) => callback(progress)),

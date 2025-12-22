@@ -1,6 +1,7 @@
 const { app, BrowserWindow, ipcMain, dialog, Menu, shell } = require('electron');
 const path = require('path');
 const fs = require('fs').promises;
+const childProcess = require('child_process');
 const http = require('http');
 const url = require('url');
 const { generateScrollingVideo, saveProject, loadProject, batchProcess } = require('./videoGenerator');
@@ -182,6 +183,53 @@ function createWindow() {
 }
 
 function registerIpcHandlers() {
+  // 🎙️ List system TTS voices (Windows SAPI via PowerShell; falls back to empty list on other OSes)
+  ipcMain.handle('list-tts-voices', async () => {
+    try {
+      if (process.platform !== 'win32') {
+        return [];
+      }
+
+      const script =
+        "Add-Type -AssemblyName System.Speech; " +
+        "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer; " +
+        "$voices = $s.GetInstalledVoices() | ForEach-Object { $_.VoiceInfo } | " +
+        "Select-Object Name,Culture,Gender,Age; " +
+        "$s.Dispose(); " +
+        "$voices | ConvertTo-Json -Compress";
+
+      const stdout = await new Promise((resolve, reject) => {
+        childProcess.execFile(
+          'powershell.exe',
+          ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
+          { windowsHide: true, maxBuffer: 5 * 1024 * 1024 },
+          (err, out, _stderr) => {
+            if (err) reject(err);
+            else resolve(out);
+          }
+        );
+      });
+
+      const trimmed = String(stdout || '').trim();
+      if (!trimmed) return [];
+      const parsed = JSON.parse(trimmed);
+      const list = Array.isArray(parsed) ? parsed : [parsed];
+      // Normalize for renderer
+      return list
+        .filter(Boolean)
+        .map((v) => ({
+          name: v.Name || v.name || '',
+          culture: v.Culture || v.culture || '',
+          gender: v.Gender || v.gender || '',
+          age: v.Age || v.age || '',
+        }))
+        .filter((v) => v.name);
+    } catch (e) {
+      console.warn('Failed to list TTS voices:', e.message || e);
+      return [];
+    }
+  });
+
   // 📜 Select single image
   ipcMain.handle('select-single-image', async () => {
     const result = await dialog.showOpenDialog({

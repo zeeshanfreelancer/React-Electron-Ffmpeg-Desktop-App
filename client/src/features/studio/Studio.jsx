@@ -19,6 +19,9 @@ function ScrollingTextVideo() {
   const [texts, setTexts] = useState([{ text: '', x: null, y: null }]);
   const [audioText, setAudioText] = useState('');
   const [audioLanguage, setAudioLanguage] = useState('en');
+  const [audioProvider, setAudioProvider] = useState('google'); // google | system
+  const [ttsVoices, setTtsVoices] = useState([]); // [{name,culture,gender,age}]
+  const [selectedTtsVoiceName, setSelectedTtsVoiceName] = useState('');
   const [width, setWidth] = useState(1920);
   const [height, setHeight] = useState(1080);
   const [scrollSpeed, setScrollSpeed] = useState(100);
@@ -154,6 +157,32 @@ function ScrollingTextVideo() {
       // ignore storage failures
     }
   }, [selectedYoutubeProfileId]);
+
+  // Load system voices (Windows). Safe no-op on other OS / when unavailable.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        if (!window.electronAPI || !window.electronAPI.listTtsVoices) return;
+        const voices = await window.electronAPI.listTtsVoices();
+        if (cancelled) return;
+        const list = Array.isArray(voices) ? voices : [];
+        setTtsVoices(list);
+        // Pick a default voice if none selected
+        if (!selectedTtsVoiceName && list.length > 0) {
+          setSelectedTtsVoiceName(list[0].name);
+        }
+      } catch (_) {
+        if (!cancelled) {
+          setTtsVoices([]);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Pan/Zoom Video Generator state
   const [panZoomImageFolder, setPanZoomImageFolder] = useState('');
@@ -1155,6 +1184,8 @@ function ScrollingTextVideo() {
         enabled: audioText.trim().length > 0,
         text: audioText.trim(),
         language: audioLanguage,
+        provider: audioProvider,
+        voiceName: selectedTtsVoiceName || null,
       },
     };
   };
@@ -1197,6 +1228,8 @@ function ScrollingTextVideo() {
     if (config.narration && config.narration.text) {
       setAudioText(config.narration.text);
       if (config.narration.language) setAudioLanguage(config.narration.language);
+      if (config.narration.provider) setAudioProvider(config.narration.provider);
+      if (config.narration.voiceName) setSelectedTtsVoiceName(config.narration.voiceName);
     }
   };
 
@@ -1332,6 +1365,9 @@ function ScrollingTextVideo() {
     text,
     audioText,
     audioLanguage,
+    audioProvider,
+    ttsVoices,
+    selectedTtsVoiceName,
     width,
     height,
     scrollSpeed,
@@ -1430,6 +1466,8 @@ function ScrollingTextVideo() {
     setText,
     setAudioText,
     setAudioLanguage,
+    setAudioProvider,
+    setSelectedTtsVoiceName,
     setWidth,
     setHeight,
     setScrollSpeed,

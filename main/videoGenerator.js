@@ -6,6 +6,7 @@ const ffmpeg = require('fluent-ffmpeg');
 const ffmpegPath = require('ffmpeg-static');
 const gTTS = require('gtts');
 const { app } = require('electron');
+const childProcess = require('child_process');
 
 ffmpeg.setFfmpegPath(ffmpegPath);
 
@@ -274,6 +275,8 @@ async function generateScrollingVideo(options, progressCallback, shouldCancel) {
       Boolean(narrationOptions.enabled) &&
       Boolean(narrationOptions.text && narrationOptions.text.trim().length > 0);
     const narrationLanguage = narrationOptions.language || 'en';
+    const narrationProvider = (narrationOptions.provider || 'google').toLowerCase(); // google | system
+    const narrationVoice = narrationOptions.voiceName || narrationOptions.voice || null;
     let narrationAudioPath = null;
 
     // Background music
@@ -283,7 +286,7 @@ async function generateScrollingVideo(options, progressCallback, shouldCancel) {
     if (shouldGenerateNarration) {
       narrationAudioPath = await generateNarrationAudio(
         narrationOptions.text.trim(),
-        narrationLanguage,
+        { provider: narrationProvider, language: narrationLanguage, voiceName: narrationVoice },
         tempDir,
         progressCallback
       );
@@ -1131,7 +1134,79 @@ function isRetryableNetworkError(error) {
 }
 
 // Generate narration audio using Google TTS with retry logic
-async function generateNarrationAudio(text, language, tempDir, progressCallback) {
+async function generateSystemNarrationAudioWindows(text, voiceName, tempDir, progressCallback) {
+  if (progressCallback) {
+    progressCallback({
+      type: 'audio',
+      message: 'Generating narration audio (System voice)...',
+    });
+  }
+
+  const audioPath = path.join(tempDir, `narration-${Date.now()}.wav`);
+  const safeText = String(text || '');
+  const safeVoice = voiceName ? String(voiceName) : '';
+
+  // Use Windows built-in SAPI voices via System.Speech (no subscription / offline).
+  const scriptParts = [
+    "Add-Type -AssemblyName System.Speech;",
+    "$s = New-Object System.Speech.Synthesis.SpeechSynthesizer;",
+    safeVoice ? `$s.SelectVoice('${safeVoice.replace(/'/g, "''")}');` : '',
+    `$s.SetOutputToWaveFile('${audioPath.replace(/'/g, "''")}');`,
+    `$s.Speak('${safeText.replace(/'/g, "''")}');`,
+    '$s.Dispose();',
+  ].filter(Boolean);
+
+  const script = scriptParts.join(' ');
+
+  await new Promise((resolve, reject) => {
+    childProcess.execFile(
+      'powershell.exe',
+      ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
+      { windowsHide: true, maxBuffer: 5 * 1024 * 1024 },
+      (err, _stdout, stderr) => {
+        if (err) {
+          reject(new Error(stderr || err.message));
+        } else {
+          resolve();
+        }
+      }
+    );
+  });
+
+  try {
+    await fs.access(audioPath);
+  } catch (_) {
+    throw new Error('System narration audio file was not created successfully');
+  }
+
+  if (progressCallback) {
+    progressCallback({
+      type: 'audio',
+      message: 'Narration audio generated (System voice).',
+    });
+  }
+
+  return audioPath;
+}
+
+async function generateNarrationAudio(text, settings, tempDir, progressCallback) {
+  const provider = settings && settings.provider ? String(settings.provider).toLowerCase() : 'google';
+  const language = settings && settings.language ? String(settings.language) : 'en';
+  const voiceName = settings && settings.voiceName ? String(settings.voiceName) : '';
+
+  if (provider === 'system') {
+    if (process.platform === 'win32') {
+      return await generateSystemNarrationAudioWindows(text, voiceName, tempDir, progressCallback);
+    }
+    // Fallback on non-Windows
+    if (progressCallback) {
+      progressCallback({
+        type: 'audio',
+        message: 'System voices are not available on this OS. Falling back to Google TTS...',
+      });
+    }
+  }
+
   if (progressCallback) {
     progressCallback({
       type: 'audio',

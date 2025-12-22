@@ -29,6 +29,9 @@ export default function AdvancedTab() {
     colorAdjustments,
     audioText,
     audioLanguage,
+    audioProvider,
+    ttsVoices,
+    selectedTtsVoiceName,
     backgroundMusic,
     exportFormat,
     qualityPreset,
@@ -64,6 +67,8 @@ export default function AdvancedTab() {
     setColorAdjustments,
     setAudioText,
     setAudioLanguage,
+    setAudioProvider,
+    setSelectedTtsVoiceName,
     setBackgroundMusic,
     setExportFormat,
     setQualityPreset,
@@ -575,22 +580,59 @@ export default function AdvancedTab() {
             />
           </div>
 
-          {/* Voice Language and Background Music in One Row */}
+          {/* Voice Provider */}
+          <div className="form-group">
+            <label>Voice Provider</label>
+            <select value={audioProvider} onChange={(e) => setAudioProvider(e.target.value)} disabled={isGenerating}>
+              <option value="google">Google TTS (Online)</option>
+              <option value="system">System Voices (Offline)</option>
+            </select>
+            <small style={{ color: '#666', fontSize: '11px' }}>
+              “System Voices” uses voices installed on your PC (no subscription). On non-Windows OS it will fall back to Google TTS.
+            </small>
+          </div>
+
+          {/* Voice Language / Voice selection + Background Music */}
           <div className="form-row audio-controls-row">
             <div className="form-group">
-              <label>Voice Language</label>
-              <select
-                value={audioLanguage}
-                onChange={(e) => setAudioLanguage(e.target.value)}
-                disabled={isGenerating}
-                className="audio-control-select"
-              >
-                {narrationLanguages.map((lang) => (
-                  <option key={lang.value} value={lang.value}>
-                    {lang.label}
-                  </option>
-                ))}
-              </select>
+              {audioProvider === 'system' ? (
+                <>
+                  <label>Voice</label>
+                  <select
+                    value={selectedTtsVoiceName}
+                    onChange={(e) => setSelectedTtsVoiceName(e.target.value)}
+                    disabled={isGenerating || !ttsVoices || ttsVoices.length === 0}
+                    className="audio-control-select"
+                  >
+                    {ttsVoices && ttsVoices.length > 0 ? (
+                      ttsVoices.map((v) => (
+                        <option key={v.name} value={v.name}>
+                          {v.name}
+                          {v.culture ? ` (${v.culture})` : ''}
+                        </option>
+                      ))
+                    ) : (
+                      <option value="">No system voices found</option>
+                    )}
+                  </select>
+                </>
+              ) : (
+                <>
+                  <label>Voice Language</label>
+                  <select
+                    value={audioLanguage}
+                    onChange={(e) => setAudioLanguage(e.target.value)}
+                    disabled={isGenerating}
+                    className="audio-control-select"
+                  >
+                    {narrationLanguages.map((lang) => (
+                      <option key={lang.value} value={lang.value}>
+                        {lang.label}
+                      </option>
+                    ))}
+                  </select>
+                </>
+              )}
             </div>
             <div className="form-group">
               <label>Background Music</label>
