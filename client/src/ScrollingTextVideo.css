@@ -372,6 +372,16 @@
   font-size: 0.95rem;
 }
 
+.progress-timing {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  margin-top: 8px;
+  color: #6c757d;
+  font-size: 0.9rem;
+  font-weight: 600;
+}
+
 .cancel-button-container {
   display: flex;
   justify-content: center;

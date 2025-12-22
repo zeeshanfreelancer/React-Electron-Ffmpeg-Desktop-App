@@ -39,6 +39,8 @@ export default function AdvancedTab() {
     exportThumbnail,
     progress,
     progressMessage,
+    scrollingElapsedSec,
+    scrollingEtaSec,
     scrollingStatus,
   } = state;
 
@@ -92,6 +94,18 @@ export default function AdvancedTab() {
     qualityPresets,
     exportFormats,
   } = constants;
+
+  const formatClock = (totalSeconds) => {
+    if (totalSeconds == null) return '';
+    const s = Math.max(0, Math.floor(Number(totalSeconds) || 0));
+    const hours = Math.floor(s / 3600);
+    const minutes = Math.floor((s % 3600) / 60);
+    const seconds = s % 60;
+    if (hours > 0) {
+      return `${String(hours).padStart(2, '0')}:${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+    }
+    return `${String(minutes).padStart(2, '0')}:${String(seconds).padStart(2, '0')}`;
+  };
 
   return (
     <div className="form-section">
@@ -736,6 +750,14 @@ export default function AdvancedTab() {
             </div>
           </div>
           {progressMessage && <p className="progress-message">{progressMessage}</p>}
+          <div className="progress-timing">
+            <span>Elapsed: {formatClock(scrollingElapsedSec)}</span>
+            {scrollingEtaSec != null && progress > 0 && progress < 100 ? (
+              <span>ETA: {formatClock(scrollingEtaSec)}</span>
+            ) : (
+              <span />
+            )}
+          </div>
           <div className="cancel-button-container">
             <button onClick={handleCancel} className="cancel-button">
               ❌ Cancel

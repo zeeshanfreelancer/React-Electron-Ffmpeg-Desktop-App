@@ -665,13 +665,25 @@ async function generateScrollingVideo(options, progressCallback, shouldCancel) {
     const baseFileName = `scrolling-video-${timestamp}`;
 
     // Generate video
-    const videoOutputPath = path.join(tempDir, `${baseFileName}-video.mp4`);
-    await encodeVideo(tempDir, videoOutputPath, fps, exportFormat, qualityPreset, bitrate, progressCallback, 'jpg');
+    const safeExportFormat = (exportFormat || 'mp4').toLowerCase();
+    const videoOutputPath = path.join(tempDir, `${baseFileName}-video.${safeExportFormat}`);
+    const totalFramesRendered = frameOffset; // exact total frames generated across all slides
+    await encodeVideo(
+      tempDir,
+      videoOutputPath,
+      fps,
+      exportFormat,
+      qualityPreset,
+      bitrate,
+      progressCallback,
+      'jpg',
+      totalFramesRendered
+    );
 
     // Mix audio if needed
     let finalVideoPath = videoOutputPath;
     if (shouldGenerateNarration || hasBgMusic) {
-      finalVideoPath = path.join(tempDir, `${baseFileName}-with-audio.mp4`);
+      finalVideoPath = path.join(tempDir, `${baseFileName}-with-audio.${safeExportFormat}`);
       await mixAllAudio(
         videoOutputPath,
         narrationAudioPath,
@@ -680,13 +692,14 @@ async function generateScrollingVideo(options, progressCallback, shouldCancel) {
         bgMusicOptions.fadeIn || 0,
         bgMusicOptions.fadeOut || 0,
         finalVideoPath,
-        progressCallback
+        progressCallback,
+        safeExportFormat
       );
       await fs.unlink(videoOutputPath).catch(() => {});
     }
 
     // Move to final location
-    const finalOutputPath = path.join(outputDir, `${baseFileName}.${exportFormat}`);
+    const finalOutputPath = path.join(outputDir, `${baseFileName}.${safeExportFormat}`);
     await fs.copyFile(finalVideoPath, finalOutputPath);
 
     // Generate additional exports
@@ -742,52 +755,104 @@ async function drawSubtitles(ctx, frameNum, fps, subtitleOptions, width, height)
 }
 
 // Helper: Encode video
-async function encodeVideo(tempDir, outputPath, fps, format, qualityPreset, bitrate, progressCallback, frameExt = 'jpg') {
+function timemarkToSeconds(timemark) {
+  // timemark format commonly "HH:MM:SS.xx"
+  if (!timemark || typeof timemark !== 'string') return null;
+  const parts = timemark.trim().split(':');
+  if (parts.length !== 3) return null;
+  const h = Number(parts[0]);
+  const m = Number(parts[1]);
+  const s = Number(parts[2]);
+  if ([h, m, s].some((n) => !Number.isFinite(n))) return null;
+  return h * 3600 + m * 60 + s;
+}
+
+async function encodeVideo(
+  tempDir,
+  outputPath,
+  fps,
+  format,
+  qualityPreset,
+  bitrate,
+  progressCallback,
+  frameExt = 'jpg',
+  totalFrames = null
+) {
   return new Promise((resolve, reject) => {
     if (progressCallback) {
       progressCallback({
         type: 'encoding',
         progress: 0,
-        message: 'Encoding video...',
+        message: `Encoding video... (quality: ${qualityPreset || 'high'})`,
       });
     }
 
+    const safeFormat = (format || 'mp4').toLowerCase();
     const command = ffmpeg()
       .input(path.join(tempDir, `frame%06d.${frameExt}`))
       .inputFPS(fps);
 
     // Set codec based on format
-    if (format === 'webm') {
+    const isWebm = safeFormat === 'webm';
+    const isMov = safeFormat === 'mov';
+    if (isWebm) {
       command.outputOptions(['-c:v libvpx-vp9', '-pix_fmt yuv420p']);
-    } else if (format === 'mov') {
+    } else if (isMov) {
       command.outputOptions(['-c:v libx264', '-pix_fmt yuv420p']);
     } else {
       command.outputOptions(['-c:v libx264', '-pix_fmt yuv420p']);
     }
 
-    // Set quality preset (favor speed; users can still push quality via lower CRF or higher bitrate)
-    const crfMap = { low: 30, medium: 25, high: 22, ultra: 20 };
-    const presetMap = { low: 'ultrafast', medium: 'veryfast', high: 'veryfast', ultra: 'fast' };
-    const crf = bitrate ? null : (crfMap[qualityPreset] || 20);
-    const preset = presetMap[qualityPreset] || 'fast';
+    // Normalize bitrate: treat 0/NaN/undefined as unset
+    const bitrateNum =
+      typeof bitrate === 'number' && Number.isFinite(bitrate) && bitrate > 0 ? bitrate : null;
+
+    // Make presets meaningfully different.
+    // x264: CRF lower = higher quality; preset slower = higher compression.
+    // vp9: CRF lower = higher quality; cpu-used lower = higher quality (slower).
+    const x264CrfMap = { low: 30, medium: 26, high: 22, ultra: 18 };
+    const x264PresetMap = { low: 'ultrafast', medium: 'veryfast', high: 'fast', ultra: 'medium' };
+    const vp9CrfMap = { low: 45, medium: 35, high: 30, ultra: 24 };
+    const vp9CpuUsedMap = { low: 8, medium: 6, high: 4, ultra: 2 };
+
+    const qp = (qualityPreset || 'high').toLowerCase();
 
     // Use multiple threads for faster encoding (use all available CPU cores)
     const threadCount = os.cpus().length;
     
-    if (bitrate) {
-      command.outputOptions([
-        `-b:v ${bitrate}k`,
-        `-preset ${preset}`,
+    if (isWebm) {
+      // VP9 speed/quality knobs
+      const crf = bitrateNum ? null : (vp9CrfMap[qp] ?? vp9CrfMap.high);
+      const cpuUsed = vp9CpuUsedMap[qp] ?? vp9CpuUsedMap.high;
+      const deadline = cpuUsed >= 6 ? 'realtime' : 'good';
+
+      const opts = [
         `-threads ${threadCount}`,
-        '-movflags +faststart' // Enable fast start for web playback
-      ]);
+        `-cpu-used ${cpuUsed}`,
+        `-deadline ${deadline}`,
+      ];
+      if (bitrateNum) {
+        opts.push(`-b:v ${bitrateNum}k`);
+      } else {
+        // Recommended pattern for constrained quality VP9: b:v 0 + crf
+        opts.push('-b:v 0');
+        opts.push(`-crf ${crf}`);
+      }
+      command.outputOptions(opts);
     } else {
-      command.outputOptions([
-        `-crf ${crf}`,
+      const crf = bitrateNum ? null : (x264CrfMap[qp] ?? x264CrfMap.high);
+      const preset = x264PresetMap[qp] ?? x264PresetMap.high;
+      const opts = [
         `-preset ${preset}`,
         `-threads ${threadCount}`,
-        '-movflags +faststart' // Enable fast start for web playback
-      ]);
+        '-movflags +faststart', // Enable fast start for web playback
+      ];
+      if (bitrateNum) {
+        opts.push(`-b:v ${bitrateNum}k`);
+      } else {
+        opts.push(`-crf ${crf}`);
+      }
+      command.outputOptions(opts);
     }
 
     command
@@ -796,15 +861,44 @@ async function encodeVideo(tempDir, outputPath, fps, format, qualityPreset, bitr
         console.log('FFmpeg command:', cmd);
       })
       .on('progress', (progress) => {
-        if (progressCallback && progress.percent) {
+        if (!progressCallback) return;
+
+        // fluent-ffmpeg often does NOT provide progress.percent for image sequences.
+        // Compute percent from timemark if possible (duration is known from totalFrames/fps).
+        let pct = null;
+        if (progress && typeof progress.percent === 'number' && Number.isFinite(progress.percent)) {
+          pct = progress.percent;
+        } else if (progress && progress.timemark && totalFrames && fps) {
+          const durationSec = Number(totalFrames) / Number(fps);
+          const tSec = timemarkToSeconds(progress.timemark);
+          if (Number.isFinite(durationSec) && durationSec > 0 && tSec != null) {
+            pct = (tSec / durationSec) * 100;
+          }
+        }
+
+        if (pct != null) {
+          const clamped = Math.max(0, Math.min(100, pct));
           progressCallback({
             type: 'encoding',
-            progress: Math.round(progress.percent),
+            progress: Math.round(clamped),
+            message: 'Encoding video...',
+          });
+        } else {
+          // Still emit a message so the UI stays informative even without a numeric percent.
+          progressCallback({
+            type: 'encoding',
             message: 'Encoding video...',
           });
         }
       })
       .on('end', () => {
+        if (progressCallback) {
+          progressCallback({
+            type: 'encoding',
+            progress: 100,
+            message: 'Encoding complete.',
+          });
+        }
         resolve(outputPath);
       })
       .on('error', (err) => {
@@ -837,7 +931,8 @@ async function mixAllAudio(
   bgMusicFadeIn,
   bgMusicFadeOut,
   outputPath,
-  progressCallback
+  progressCallback,
+  exportFormat = 'mp4'
 ) {
   if (progressCallback) {
     progressCallback({
@@ -911,11 +1006,18 @@ async function mixAllAudio(
       audioMapLabel = 'a1';
     }
 
+    const safeFormat = (exportFormat || 'mp4').toLowerCase();
+    const isWebm = safeFormat === 'webm';
     const outputOptions = ['-map', '0:v:0'];
     if (audioMapLabel) {
       outputOptions.push('-map', `[${audioMapLabel}]`);
     }
-    outputOptions.push('-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-shortest');
+    if (isWebm) {
+      // WebM typically uses Opus.
+      outputOptions.push('-c:v', 'copy', '-c:a', 'libopus', '-b:a', '128k', '-shortest');
+    } else {
+      outputOptions.push('-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-shortest');
+    }
 
     command
       .complexFilter(audioFilters.length > 0 ? audioFilters : [])

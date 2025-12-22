@@ -77,6 +77,15 @@ function ScrollingTextVideo() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [progress, setProgress] = useState(0);
   const [progressMessage, setProgressMessage] = useState('');
+  // Timing (Advanced generator): elapsed + ETA based on observed progress rate
+  const [scrollingElapsedSec, setScrollingElapsedSec] = useState(0);
+  const [scrollingEtaSec, setScrollingEtaSec] = useState(null); // null = unknown / not enough info yet
+  const scrollingTimingRef = useRef({
+    startMs: 0,
+    lastMs: 0,
+    lastProgress: 0,
+    emaSecPerPct: null, // exponential moving average (seconds per 1%)
+  });
   // Scoped status messages so notifications only appear in the relevant section
   const [scrollingStatus, setScrollingStatus] = useState('');
   const [panZoomStatus, setPanZoomStatus] = useState('');
@@ -84,6 +93,32 @@ function ScrollingTextVideo() {
   const [youtubeStatus, setYoutubeStatus] = useState('');
   const [activeMainTab, setActiveMainTab] = useState('advanced');
   const [activeSettingsTab, setActiveSettingsTab] = useState('basic');
+
+  const resetScrollingTiming = () => {
+    const now = Date.now();
+    scrollingTimingRef.current = {
+      startMs: now,
+      lastMs: now,
+      lastProgress: 0,
+      emaSecPerPct: null,
+    };
+    setScrollingElapsedSec(0);
+    setScrollingEtaSec(null);
+  };
+
+  // Keep "elapsed time" ticking while generating
+  useEffect(() => {
+    if (!isGenerating) return;
+    if (!scrollingTimingRef.current.startMs) {
+      resetScrollingTiming();
+    }
+    const id = setInterval(() => {
+      const startMs = scrollingTimingRef.current.startMs || Date.now();
+      const elapsed = Math.max(0, Math.floor((Date.now() - startMs) / 1000));
+      setScrollingElapsedSec(elapsed);
+    }, 500);
+    return () => clearInterval(id);
+  }, [isGenerating]);
 
   // YouTube Upload state
   const [youtubeProfiles, setYoutubeProfiles] = useState([]);
@@ -186,12 +221,48 @@ function ScrollingTextVideo() {
         }
         setProgressMessage(progressData.message);
       }
+
+      // Update ETA estimate when progress moves forward
+      if (canUpdateProgress) {
+        const p = Math.max(0, Math.min(100, progressData.progress));
+        const now = Date.now();
+        const t = scrollingTimingRef.current;
+        if (!t.startMs) {
+          t.startMs = now;
+          t.lastMs = now;
+          t.lastProgress = p;
+          t.emaSecPerPct = null;
+          setScrollingElapsedSec(0);
+          setScrollingEtaSec(null);
+        }
+
+        const dp = p - (t.lastProgress || 0);
+        const dt = (now - (t.lastMs || now)) / 1000;
+        // Only update on forward motion and with a minimum time delta to reduce noise.
+        if (dp > 0.1 && dt >= 0.2) {
+          const secPerPct = dt / dp;
+          const alpha = 0.25; // smoothing factor (higher = more responsive, lower = more stable)
+          const ema = t.emaSecPerPct == null ? secPerPct : (t.emaSecPerPct * (1 - alpha) + secPerPct * alpha);
+          t.emaSecPerPct = ema;
+          const remaining = (100 - p) * ema;
+          setScrollingEtaSec(Number.isFinite(remaining) && remaining > 0 ? Math.round(remaining) : null);
+        }
+
+        t.lastMs = now;
+        t.lastProgress = p;
+
+        // If we're essentially done, don't show ETA
+        if (p >= 100) {
+          setScrollingEtaSec(0);
+        }
+      }
     });
 
     window.electronAPI.onScrollingVideoDone((path) => {
       setIsGenerating(false);
       setProgress(100);
       setProgressMessage('');
+      setScrollingEtaSec(0);
       setScrollingStatus(`✅ Video created successfully: ${path}`);
     });
 
@@ -199,6 +270,7 @@ function ScrollingTextVideo() {
       setIsGenerating(false);
       setProgress(0);
       setProgressMessage('');
+      setScrollingEtaSec(null);
       setScrollingStatus(`❌ Error: ${error}`);
     });
 
@@ -206,6 +278,7 @@ function ScrollingTextVideo() {
       setIsGenerating(false);
       setProgress(0);
       setProgressMessage('');
+      setScrollingEtaSec(null);
       setScrollingStatus('⚠️ Video generation cancelled');
     });
 
@@ -1159,6 +1232,7 @@ function ScrollingTextVideo() {
     setProgress(0);
     setProgressMessage('Initializing...');
     setScrollingStatus('🎬 Generating video...');
+    resetScrollingTiming();
 
     const options = buildConfig();
     window.electronAPI.generateScrollingVideo(options);
@@ -1169,6 +1243,7 @@ function ScrollingTextVideo() {
     setIsGenerating(false);
     setProgress(0);
     setProgressMessage('');
+    setScrollingEtaSec(null);
     setScrollingStatus('⚠️ Video generation cancelled');
   };
 
@@ -1290,6 +1365,8 @@ function ScrollingTextVideo() {
     isGenerating,
     progress,
     progressMessage,
+    scrollingElapsedSec,
+    scrollingEtaSec,
     scrollingStatus,
 
     // Pan/Zoom
