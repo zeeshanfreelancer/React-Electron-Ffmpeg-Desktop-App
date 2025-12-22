@@ -304,9 +304,63 @@ async function generateScrollingVideo(options, progressCallback, shouldCancel) {
     const canvas = new Canvas(width, height);
     const ctx = canvas.getContext('2d');
 
+    // IMPORTANT:
+    // Frame rendering is very CPU-heavy (canvas draw + toBufferSync). The previous implementation tried to
+    // "parallelize" frames via Promise.all, but because most work happens synchronously before the first await,
+    // it blocks the event loop and can make the Electron UI feel frozen (no scrolling / unresponsive window).
+    // We intentionally render frames sequentially and yield to the event loop frequently to keep the app responsive.
+
     // Process all slides
     let allFrames = [];
     let frameOffset = 0;
+
+    // Pre-compute an estimated total frame count for smoother progress reporting
+    // (purely based on text metrics + duration overrides; does not load images).
+    let totalGlobalFrames = 0;
+    try {
+      const measureCanvas = new Canvas(width, height);
+      const measureCtx = measureCanvas.getContext('2d');
+      measureCtx.font = `${fontSize}px ${fontFamily}`;
+      const maxWidth = width - 100;
+      const lineHeight = fontSize * 1.5;
+
+      for (const slide of slideConfigs) {
+        const slideTexts =
+          slide.texts ||
+          (slide.text ? [{ text: slide.text, ...options }] : []);
+
+        // Word wrap (approx) to estimate height
+        let maxTextHeight = 0;
+        for (const textBlock of slideTexts) {
+          const textContent = (textBlock && textBlock.text) ? String(textBlock.text) : '';
+          const words = textContent.split(' ');
+          let currentLine = '';
+          let linesCount = 0;
+          for (const word of words) {
+            const testLine = currentLine ? `${currentLine} ${word}` : word;
+            const metrics = measureCtx.measureText(testLine);
+            if (metrics.width > maxWidth && currentLine) {
+              linesCount += 1;
+              currentLine = word;
+            } else {
+              currentLine = testLine;
+            }
+          }
+          if (currentLine) linesCount += 1;
+          maxTextHeight = Math.max(maxTextHeight, linesCount * lineHeight);
+        }
+
+        const totalScrollDistance = height + maxTextHeight;
+        const scrollPerFrame = scrollSpeed / fps;
+        const totalFrames = Math.ceil(totalScrollDistance / scrollPerFrame);
+        const slideDuration = slide.duration || (totalFrames / fps);
+        const slideFrames = Math.ceil(slideDuration * fps);
+        totalGlobalFrames += slideFrames;
+      }
+    } catch (_) {
+      // If estimation fails, fall back to "unknown total" behavior (we'll still send progress updates).
+      totalGlobalFrames = 0;
+    }
 
     for (let slideIndex = 0; slideIndex < slideConfigs.length; slideIndex++) {
       // Check for cancellation before processing each slide
@@ -326,6 +380,11 @@ async function generateScrollingVideo(options, progressCallback, shouldCancel) {
         // Multi-image slideshow background
         bgImage = await loadImage(slide.imagePaths[0]);
       }
+
+      // Reuse a single canvas per slide to avoid per-frame allocations (big speed win).
+      // This is safe because we render frames sequentially.
+      const frameCanvas = new Canvas(width, height);
+      const frameCtx = frameCanvas.getContext('2d');
 
       // Calculate text dimensions for this slide
       ctx.font = `${fontSize}px ${fontFamily}`;
@@ -388,19 +447,23 @@ async function generateScrollingVideo(options, progressCallback, shouldCancel) {
       }
 
       // Generate frames for this slide with parallel processing
-      // Determine optimal concurrency based on CPU cores (default to 4, max 8)
-      const cpuCount = os.cpus().length;
-      const CONCURRENCY = Math.min(Math.max(4, Math.floor(cpuCount / 2)), 8);
-      const PARALLEL_BATCH_SIZE = CONCURRENCY; // Process this many frames in parallel
-
       // Helper function to generate a single frame
       const generateSingleFrame = async (frameNum, globalFrameNum) => {
-        // Create a new canvas instance for this frame (thread-safe)
-        const frameCanvas = new Canvas(width, height);
-        const frameCtx = frameCanvas.getContext('2d');
+        // Yield periodically so the Electron window remains responsive, without paying the cost every frame.
+        // (Rendering uses synchronous canvas operations.)
+        if (frameNum % 5 === 0) {
+          await new Promise((resolve) => setImmediate(resolve));
+        }
+
+        // Check cancellation before doing heavy work
+        if (shouldCancel && shouldCancel()) {
+          throw new Error('Video generation cancelled');
+        }
 
         // Reset filters
         frameCtx.filter = 'none';
+        frameCtx.globalAlpha = 1;
+        frameCtx.setTransform(1, 0, 0, 1, 0, 0);
 
         // Handle multi-image background rotation (use cached images)
         let currentBgImage = bgImage;
@@ -409,6 +472,9 @@ async function generateScrollingVideo(options, progressCallback, shouldCancel) {
           const imagePath = slide.imagePaths[imageIndex];
           currentBgImage = imageCache.get(imagePath) || bgImage;
         }
+
+        // Clear previous frame
+        frameCtx.clearRect(0, 0, width, height);
 
         // Draw background
         if (currentBgImage) {
@@ -540,8 +606,9 @@ async function generateScrollingVideo(options, progressCallback, shouldCancel) {
         }
 
         // Capture buffer and save frame
-        const buffer = frameCanvas.toBufferSync('png');
-        const frameFileName = `frame${String(globalFrameNum).padStart(6, '0')}.png`;
+        // JPEG is much faster (smaller frames, faster disk IO). Quality 0.95 keeps text crisp.
+        const buffer = frameCanvas.toBufferSync('jpeg', { quality: 0.95 });
+        const frameFileName = `frame${String(globalFrameNum).padStart(6, '0')}.jpg`;
         const frameFilePath = path.join(tempDir, frameFileName);
         
         // Write frame to disk
@@ -550,48 +617,31 @@ async function generateScrollingVideo(options, progressCallback, shouldCancel) {
         return { frameNum, globalFrameNum };
       };
 
-      // Generate frames in parallel batches
-      const totalGlobalFrames = slideConfigs.reduce((sum, s) => {
-        const sFrames = Math.ceil((s.duration || (totalFrames / fps)) * fps);
-        return sum + sFrames;
-      }, 0);
+      // Generate frames sequentially (responsive, predictable memory usage)
+      for (let frameNum = 0; frameNum < slideFrames; frameNum++) {
+        const globalFrameNum = frameOffset + frameNum;
+        await generateSingleFrame(frameNum, globalFrameNum);
 
-      for (let batchStart = 0; batchStart < slideFrames; batchStart += PARALLEL_BATCH_SIZE) {
-        // Check for cancellation
-        if (shouldCancel && shouldCancel()) {
-          throw new Error('Video generation cancelled');
-        }
+        // Report progress periodically (~1 update per second) to avoid spamming IPC/UI rerenders.
+        const progressEvery = Math.max(1, Math.floor(fps));
+        const shouldReport =
+          frameNum === 0 ||
+          frameNum === slideFrames - 1 ||
+          (frameNum + 1) % progressEvery === 0;
 
-        const batchEnd = Math.min(batchStart + PARALLEL_BATCH_SIZE, slideFrames);
-        const batchPromises = [];
+        if (progressCallback && shouldReport) {
+          const currentDone = frameOffset + frameNum + 1;
+          const totalForProgress = totalGlobalFrames || (frameOffset + slideFrames);
+          const progressPct = (currentDone / totalForProgress) * 100;
 
-        // Create promises for this batch
-        for (let frameNum = batchStart; frameNum < batchEnd; frameNum++) {
-          const globalFrameNum = frameOffset + frameNum;
-          batchPromises.push(generateSingleFrame(frameNum, globalFrameNum));
-        }
-
-        // Process batch in parallel
-        await Promise.all(batchPromises);
-
-        // Report progress after each batch
-        if (progressCallback) {
-          // Check for cancellation before reporting progress
-          if (shouldCancel && shouldCancel()) {
-            throw new Error('Video generation cancelled');
-          }
-
-          const progress = ((frameOffset + batchEnd) / totalGlobalFrames) * 100;
           progressCallback({
             type: 'frame',
-            current: frameOffset + batchEnd,
-            total: totalGlobalFrames,
-            progress: Math.round(progress),
+            current: currentDone,
+            total: totalForProgress,
+            progress: Math.max(0, Math.min(100, Math.round(progressPct))),
+            message: `Rendering frames... ${currentDone}/${totalForProgress} (slide ${slideIndex + 1}/${slideConfigs.length})`,
           });
         }
-
-        // Yield to event loop periodically to keep UI responsive
-        await new Promise(resolve => setImmediate(resolve));
       }
 
       frameOffset += slideFrames;
@@ -616,7 +666,7 @@ async function generateScrollingVideo(options, progressCallback, shouldCancel) {
 
     // Generate video
     const videoOutputPath = path.join(tempDir, `${baseFileName}-video.mp4`);
-    await encodeVideo(tempDir, videoOutputPath, fps, exportFormat, qualityPreset, bitrate, progressCallback);
+    await encodeVideo(tempDir, videoOutputPath, fps, exportFormat, qualityPreset, bitrate, progressCallback, 'jpg');
 
     // Mix audio if needed
     let finalVideoPath = videoOutputPath;
@@ -692,7 +742,7 @@ async function drawSubtitles(ctx, frameNum, fps, subtitleOptions, width, height)
 }
 
 // Helper: Encode video
-async function encodeVideo(tempDir, outputPath, fps, format, qualityPreset, bitrate, progressCallback) {
+async function encodeVideo(tempDir, outputPath, fps, format, qualityPreset, bitrate, progressCallback, frameExt = 'jpg') {
   return new Promise((resolve, reject) => {
     if (progressCallback) {
       progressCallback({
@@ -703,7 +753,7 @@ async function encodeVideo(tempDir, outputPath, fps, format, qualityPreset, bitr
     }
 
     const command = ffmpeg()
-      .input(path.join(tempDir, 'frame%06d.png'))
+      .input(path.join(tempDir, `frame%06d.${frameExt}`))
       .inputFPS(fps);
 
     // Set codec based on format
@@ -715,9 +765,9 @@ async function encodeVideo(tempDir, outputPath, fps, format, qualityPreset, bitr
       command.outputOptions(['-c:v libx264', '-pix_fmt yuv420p']);
     }
 
-    // Set quality preset (optimized for speed while maintaining quality)
-    const crfMap = { low: 28, medium: 23, high: 20, ultra: 18 }; // Slightly higher CRF for faster encoding
-    const presetMap = { low: 'veryfast', medium: 'fast', high: 'fast', ultra: 'medium' }; // Use 'fast' for high quality
+    // Set quality preset (favor speed; users can still push quality via lower CRF or higher bitrate)
+    const crfMap = { low: 30, medium: 25, high: 22, ultra: 20 };
+    const presetMap = { low: 'ultrafast', medium: 'veryfast', high: 'veryfast', ultra: 'fast' };
     const crf = bitrate ? null : (crfMap[qualityPreset] || 20);
     const preset = presetMap[qualityPreset] || 'fast';
 
@@ -888,7 +938,7 @@ async function mixAllAudio(
 }
 
 // Helper: Generate GIF
-async function generateGif(tempDir, outputPath, fps, progressCallback) {
+async function generateGif(tempDir, outputPath, fps, progressCallback, frameExt = 'jpg') {
   if (progressCallback) {
     progressCallback({
       type: 'gif',
@@ -898,7 +948,7 @@ async function generateGif(tempDir, outputPath, fps, progressCallback) {
 
   return new Promise((resolve, reject) => {
     ffmpeg()
-      .input(path.join(tempDir, 'frame%06d.png'))
+      .input(path.join(tempDir, `frame%06d.${frameExt}`))
       .inputFPS(fps)
       .outputOptions([
         '-vf',
@@ -907,7 +957,7 @@ async function generateGif(tempDir, outputPath, fps, progressCallback) {
       .output(path.join(tempDir, 'palette.png'))
       .on('end', () => {
         ffmpeg()
-          .input(path.join(tempDir, 'frame%06d.png'))
+          .input(path.join(tempDir, `frame%06d.${frameExt}`))
           .input(path.join(tempDir, 'palette.png'))
           .inputFPS(fps)
           .complexFilter([

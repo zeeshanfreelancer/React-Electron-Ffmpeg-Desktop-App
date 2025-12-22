@@ -225,14 +225,17 @@ async function createVideoFromImages(
         ? await loadImage(imagePaths[imgIndex + 1])
         : null;
 
-      // Generate frames for this image
-      const framePromises = [];
-      const batchSize = 10; // Process frames in batches
+      // Generate frames sequentially with frequent yields to keep the Electron UI responsive.
+      // The previous "batch Promise.all" approach still executed most work synchronously before the first await,
+      // which can make the app feel frozen on lower-core machines.
       const frameStart = imgIndex === 0 ? 0 : transitionFrames;
       for (let frame = frameStart; frame < totalFrames; frame++) {
         if (shouldCancel && shouldCancel()) {
           throw new Error('Video generation cancelled');
         }
+
+        // Yield before heavy sync operations (canvas draw + toBufferSync)
+        await new Promise((resolve) => setImmediate(resolve));
 
         const t = frame / fps;
         const currentFrameIndex = frameIndex;
@@ -243,84 +246,80 @@ async function createVideoFromImages(
         const rawProgress = isInTransition ? (frame - (totalFrames - transitionFrames)) / transitionFrames : 0;
         const p = isInTransition ? easeInOutCubic(Math.min(1, Math.max(0, rawProgress))) : 0;
 
-        // Generate frame asynchronously
-        const framePromise = (async () => {
-          const canvas = new Canvas(videoWidth, videoHeight);
-          const ctx = canvas.getContext('2d');
+        const canvas = new Canvas(videoWidth, videoHeight);
+        const ctx = canvas.getContext('2d');
 
-          // Black background
-          ctx.fillStyle = '#000000';
-          ctx.fillRect(0, 0, videoWidth, videoHeight);
+        // Black background
+        ctx.fillStyle = '#000000';
+        ctx.fillRect(0, 0, videoWidth, videoHeight);
 
-          if (!isInTransition || transitionType === 'none' || !nextImage) {
+        if (!isInTransition || transitionType === 'none' || !nextImage) {
+          drawImageWithEffects(ctx, image, t, imgIndex * 100000 + frame, null);
+        } else {
+          // Draw current image
+          if (transitionType === 'crossfade') {
+            ctx.save();
+            ctx.globalAlpha = 1 - p;
             drawImageWithEffects(ctx, image, t, imgIndex * 100000 + frame, null);
-          } else {
-            // Draw current image
-            if (transitionType === 'crossfade') {
-              ctx.save();
-              ctx.globalAlpha = 1 - p;
-              drawImageWithEffects(ctx, image, t, imgIndex * 100000 + frame, null);
-              ctx.restore();
+            ctx.restore();
 
-              ctx.save();
-              ctx.globalAlpha = p;
-              const t2 = (frame - (totalFrames - transitionFrames)) / fps;
-              drawImageWithEffects(ctx, nextImage, t2, (imgIndex + 1) * 100000 + frame, null);
-              ctx.restore();
-            } else if (transitionType === 'slide-left' || transitionType === 'slide-right') {
-              drawImageWithEffects(ctx, image, t, imgIndex * 100000 + frame, null);
-              const t2 = (frame - (totalFrames - transitionFrames)) / fps;
-              const dx = (transitionType === 'slide-left' ? 1 : -1) * (1 - p) * videoWidth;
-              drawImageWithEffects(ctx, nextImage, t2, (imgIndex + 1) * 100000 + frame, { dx, dy: 0 });
-            } else if (transitionType.startsWith('wipe-')) {
-              drawImageWithEffects(ctx, image, t, imgIndex * 100000 + frame, null);
-              const t2 = (frame - (totalFrames - transitionFrames)) / fps;
+            ctx.save();
+            ctx.globalAlpha = p;
+            const t2 = (frame - (totalFrames - transitionFrames)) / fps;
+            drawImageWithEffects(ctx, nextImage, t2, (imgIndex + 1) * 100000 + frame, null);
+            ctx.restore();
+          } else if (transitionType === 'slide-left' || transitionType === 'slide-right') {
+            drawImageWithEffects(ctx, image, t, imgIndex * 100000 + frame, null);
+            const t2 = (frame - (totalFrames - transitionFrames)) / fps;
+            const dx = (transitionType === 'slide-left' ? 1 : -1) * (1 - p) * videoWidth;
+            drawImageWithEffects(ctx, nextImage, t2, (imgIndex + 1) * 100000 + frame, { dx, dy: 0 });
+          } else if (transitionType.startsWith('wipe-')) {
+            drawImageWithEffects(ctx, image, t, imgIndex * 100000 + frame, null);
+            const t2 = (frame - (totalFrames - transitionFrames)) / fps;
 
-              ctx.save();
-              if (transitionType === 'wipe-left') {
-                ctx.beginPath();
-                ctx.rect(0, 0, p * videoWidth, videoHeight);
-                ctx.clip();
-              } else if (transitionType === 'wipe-right') {
-                const w = p * videoWidth;
-                ctx.beginPath();
-                ctx.rect(videoWidth - w, 0, w, videoHeight);
-                ctx.clip();
-              } else if (transitionType === 'wipe-up') {
-                const h = p * videoHeight;
-                ctx.beginPath();
-                ctx.rect(0, videoHeight - h, videoWidth, h);
-                ctx.clip();
-              } else if (transitionType === 'wipe-down') {
-                const h = p * videoHeight;
-                ctx.beginPath();
-                ctx.rect(0, 0, videoWidth, h);
-                ctx.clip();
-              }
-              drawImageWithEffects(ctx, nextImage, t2, (imgIndex + 1) * 100000 + frame, null);
-              ctx.restore();
-            } else {
-              // Unknown transition type => fallback to crossfade
-              ctx.save();
-              ctx.globalAlpha = 1 - p;
-              drawImageWithEffects(ctx, image, t, imgIndex * 100000 + frame, null);
-              ctx.restore();
-              ctx.save();
-              ctx.globalAlpha = p;
-              const t2 = (frame - (totalFrames - transitionFrames)) / fps;
-              drawImageWithEffects(ctx, nextImage, t2, (imgIndex + 1) * 100000 + frame, null);
-              ctx.restore();
+            ctx.save();
+            if (transitionType === 'wipe-left') {
+              ctx.beginPath();
+              ctx.rect(0, 0, p * videoWidth, videoHeight);
+              ctx.clip();
+            } else if (transitionType === 'wipe-right') {
+              const w = p * videoWidth;
+              ctx.beginPath();
+              ctx.rect(videoWidth - w, 0, w, videoHeight);
+              ctx.clip();
+            } else if (transitionType === 'wipe-up') {
+              const h = p * videoHeight;
+              ctx.beginPath();
+              ctx.rect(0, videoHeight - h, videoWidth, h);
+              ctx.clip();
+            } else if (transitionType === 'wipe-down') {
+              const h = p * videoHeight;
+              ctx.beginPath();
+              ctx.rect(0, 0, videoWidth, h);
+              ctx.clip();
             }
+            drawImageWithEffects(ctx, nextImage, t2, (imgIndex + 1) * 100000 + frame, null);
+            ctx.restore();
+          } else {
+            // Unknown transition type => fallback to crossfade
+            ctx.save();
+            ctx.globalAlpha = 1 - p;
+            drawImageWithEffects(ctx, image, t, imgIndex * 100000 + frame, null);
+            ctx.restore();
+            ctx.save();
+            ctx.globalAlpha = p;
+            const t2 = (frame - (totalFrames - transitionFrames)) / fps;
+            drawImageWithEffects(ctx, nextImage, t2, (imgIndex + 1) * 100000 + frame, null);
+            ctx.restore();
           }
+        }
 
-          // Save as JPEG (much faster than PNG)
-          const frameFileName = `frame${String(currentFrameIndex).padStart(6, '0')}.jpg`;
-          const framePath = path.join(tempDir, frameFileName);
-          const buffer = canvas.toBufferSync('jpeg', { quality: 0.95 }); // High quality JPEG
-          await fs.writeFile(framePath, buffer);
-        })();
+        // Save as JPEG (much faster than PNG)
+        const frameFileName = `frame${String(currentFrameIndex).padStart(6, '0')}.jpg`;
+        const framePath = path.join(tempDir, frameFileName);
+        const buffer = canvas.toBufferSync('jpeg', { quality: 0.95 }); // High quality JPEG
+        await fs.writeFile(framePath, buffer);
 
-        framePromises.push(framePromise);
         frameIndex++;
 
         // Update progress periodically
@@ -333,12 +332,6 @@ async function createVideoFromImages(
             current: frameIndex,
             total: totalFramesToGenerate,
           });
-        }
-
-        // Process in batches to avoid memory issues
-        if (framePromises.length >= batchSize || frame === totalFrames - 1) {
-          await Promise.all(framePromises);
-          framePromises.length = 0;
         }
       }
     }
