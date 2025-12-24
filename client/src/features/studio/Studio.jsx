@@ -22,6 +22,9 @@ function ScrollingTextVideo() {
   const [audioProvider, setAudioProvider] = useState('google'); // google | system
   const [ttsVoices, setTtsVoices] = useState([]); // [{name,culture,gender,age}]
   const [selectedTtsVoiceName, setSelectedTtsVoiceName] = useState('');
+  const [xttsVoices, setXttsVoices] = useState([]); // [{id,label,filename}]
+  const [xttsVoicesError, setXttsVoicesError] = useState('');
+  const [selectedXttsVoiceId, setSelectedXttsVoiceId] = useState('');
   const [width, setWidth] = useState(1920);
   const [height, setHeight] = useState(1080);
   const [scrollSpeed, setScrollSpeed] = useState(100);
@@ -183,6 +186,46 @@ function ScrollingTextVideo() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Load XTTS voices when provider is selected (may start XTTS sidecar)
+  useEffect(() => {
+    let cancelled = false;
+    if (audioProvider !== 'xtts') return () => {};
+    (async () => {
+      try {
+        setXttsVoicesError('');
+        if (!window.electronAPI || !window.electronAPI.xttsListVoices) {
+          setXttsVoices([]);
+          setXttsVoicesError('XTTS API is not available (preload not loaded).');
+          return;
+        }
+        console.log('[XTTS] Fetching voices...');
+        const result = await window.electronAPI.xttsListVoices();
+        console.log('[XTTS] Result:', result);
+        if (cancelled) return;
+        const list = result && Array.isArray(result.voices) ? result.voices : [];
+        console.log('[XTTS] Voices list:', list);
+        setXttsVoices(list);
+        if (!selectedXttsVoiceId && list.length > 0) {
+          setSelectedXttsVoiceId(list[0].id);
+        }
+        if (result && result.error) {
+          console.error('[XTTS] Error from server:', result.error);
+          setXttsVoicesError(String(result.error || ''));
+        }
+      } catch (err) {
+        console.error('[XTTS] Exception:', err);
+        if (!cancelled) {
+          setXttsVoices([]);
+          setXttsVoicesError(err?.message ? String(err.message) : String(err));
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [audioProvider]);
 
   // Pan/Zoom Video Generator state
   const [panZoomImageFolder, setPanZoomImageFolder] = useState('');
@@ -1148,6 +1191,12 @@ function ScrollingTextVideo() {
   };
 
   const buildConfig = () => {
+    const resolvedVoiceName =
+      audioProvider === 'system'
+        ? (selectedTtsVoiceName || null)
+        : audioProvider === 'xtts'
+          ? (selectedXttsVoiceId || null)
+          : null;
     return {
       imagePath,
       imagePaths: imagePaths.length > 0 ? imagePaths : null,
@@ -1185,7 +1234,7 @@ function ScrollingTextVideo() {
         text: audioText.trim(),
         language: audioLanguage,
         provider: audioProvider,
-        voiceName: selectedTtsVoiceName || null,
+        voiceName: resolvedVoiceName,
       },
     };
   };
@@ -1229,7 +1278,12 @@ function ScrollingTextVideo() {
       setAudioText(config.narration.text);
       if (config.narration.language) setAudioLanguage(config.narration.language);
       if (config.narration.provider) setAudioProvider(config.narration.provider);
-      if (config.narration.voiceName) setSelectedTtsVoiceName(config.narration.voiceName);
+      if (config.narration.voiceName) {
+        // Apply to the correct provider bucket
+        const p = (config.narration.provider || '').toLowerCase();
+        if (p === 'system') setSelectedTtsVoiceName(config.narration.voiceName);
+        if (p === 'xtts') setSelectedXttsVoiceId(config.narration.voiceName);
+      }
     }
   };
 
@@ -1368,6 +1422,9 @@ function ScrollingTextVideo() {
     audioProvider,
     ttsVoices,
     selectedTtsVoiceName,
+    xttsVoices,
+    xttsVoicesError,
+    selectedXttsVoiceId,
     width,
     height,
     scrollSpeed,
@@ -1468,6 +1525,7 @@ function ScrollingTextVideo() {
     setAudioLanguage,
     setAudioProvider,
     setSelectedTtsVoiceName,
+    setSelectedXttsVoiceId,
     setWidth,
     setHeight,
     setScrollSpeed,

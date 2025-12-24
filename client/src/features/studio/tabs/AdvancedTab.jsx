@@ -32,6 +32,9 @@ export default function AdvancedTab() {
     audioProvider,
     ttsVoices,
     selectedTtsVoiceName,
+    xttsVoices,
+    xttsVoicesError,
+    selectedXttsVoiceId,
     backgroundMusic,
     exportFormat,
     qualityPreset,
@@ -69,6 +72,7 @@ export default function AdvancedTab() {
     setAudioLanguage,
     setAudioProvider,
     setSelectedTtsVoiceName,
+    setSelectedXttsVoiceId,
     setBackgroundMusic,
     setExportFormat,
     setQualityPreset,
@@ -586,16 +590,42 @@ export default function AdvancedTab() {
             <select value={audioProvider} onChange={(e) => setAudioProvider(e.target.value)} disabled={isGenerating}>
               <option value="google">Google TTS (Online)</option>
               <option value="system">System Voices (Offline)</option>
+              <option value="xtts">XTTS (Bundled Offline)</option>
             </select>
             <small style={{ color: '#666', fontSize: '11px' }}>
-              “System Voices” uses voices installed on your PC (no subscription). On non-Windows OS it will fall back to Google TTS.
+              “System Voices” uses voices installed on your PC (no subscription). “XTTS” uses a bundled local XTTS server + model files.
             </small>
           </div>
 
           {/* Voice Language / Voice selection + Background Music */}
           <div className="form-row audio-controls-row">
             <div className="form-group">
-              {audioProvider === 'system' ? (
+              {audioProvider === 'xtts' ? (
+                <>
+                  <label>XTTS Voice</label>
+                  <select
+                    value={selectedXttsVoiceId}
+                    onChange={(e) => setSelectedXttsVoiceId(e.target.value)}
+                    disabled={isGenerating || !xttsVoices || xttsVoices.length === 0}
+                    className="audio-control-select"
+                  >
+                    {xttsVoices && xttsVoices.length > 0 ? (
+                      xttsVoices.map((v) => (
+                        <option key={v.id} value={v.id}>
+                          {v.label || v.id}
+                        </option>
+                      ))
+                    ) : (
+                      <option value="">No XTTS voices found</option>
+                    )}
+                  </select>
+                  {xttsVoicesError ? (
+                    <small style={{ color: '#b00020', fontSize: '11px', marginTop: '4px', display: 'block' }}>
+                      XTTS error: {xttsVoicesError}
+                    </small>
+                  ) : null}
+                </>
+              ) : audioProvider === 'system' ? (
                 <>
                   <label>Voice</label>
                   <select

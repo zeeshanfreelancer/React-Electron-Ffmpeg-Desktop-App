@@ -7,6 +7,7 @@ const url = require('url');
 const { generateScrollingVideo, saveProject, loadProject, batchProcess } = require('./videoGenerator');
 const { generatePanZoomVideo } = require('./panZoomVideoGenerator');
 const youtubeUploader = require('./youtubeUploader');
+const xttsManager = require('./xttsManager');
 
 // Cancellation state
 let currentVideoGeneration = {
@@ -227,6 +228,19 @@ function registerIpcHandlers() {
     } catch (e) {
       console.warn('Failed to list TTS voices:', e.message || e);
       return [];
+    }
+  });
+
+  // 🧠 XTTS voices (bundled A1) - list selectable voices from xtts/voices
+  ipcMain.handle('xtts-list-voices', async () => {
+    try {
+      console.log('[XTTS Main] Listing voices...');
+      const voices = await xttsManager.listVoices();
+      console.log('[XTTS Main] Found voices:', voices);
+      return { voices };
+    } catch (e) {
+      console.error('[XTTS Main] Error listing voices:', e);
+      return { voices: [], error: e.message || String(e) };
     }
   });
 
@@ -793,6 +807,12 @@ app.on('window-all-closed', () => {
     if (oauthCallbackServer) {
       oauthCallbackServer.close();
       oauthCallbackServer = null;
+    }
+    // Stop XTTS sidecar if running
+    try {
+      xttsManager.stop();
+    } catch (_) {
+      // ignore
     }
     app.quit();
   }

@@ -7,6 +7,7 @@ const ffmpegPath = require('ffmpeg-static');
 const gTTS = require('gtts');
 const { app } = require('electron');
 const childProcess = require('child_process');
+const xttsManager = require('./xttsManager');
 
 ffmpeg.setFfmpegPath(ffmpegPath);
 
@@ -622,7 +623,7 @@ async function generateScrollingVideo(options, progressCallback, shouldCancel) {
 
       // Generate frames sequentially (responsive, predictable memory usage)
       for (let frameNum = 0; frameNum < slideFrames; frameNum++) {
-        const globalFrameNum = frameOffset + frameNum;
+          const globalFrameNum = frameOffset + frameNum;
         await generateSingleFrame(frameNum, globalFrameNum);
 
         // Report progress periodically (~1 update per second) to avoid spamming IPC/UI rerenders.
@@ -836,7 +837,7 @@ async function encodeVideo(
       ];
       if (bitrateNum) {
         opts.push(`-b:v ${bitrateNum}k`);
-      } else {
+    } else {
         // Recommended pattern for constrained quality VP9: b:v 0 + crf
         opts.push('-b:v 0');
         opts.push(`-crf ${crf}`);
@@ -1019,7 +1020,7 @@ async function mixAllAudio(
       // WebM typically uses Opus.
       outputOptions.push('-c:v', 'copy', '-c:a', 'libopus', '-b:a', '128k', '-shortest');
     } else {
-      outputOptions.push('-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-shortest');
+    outputOptions.push('-c:v', 'copy', '-c:a', 'aac', '-b:a', '192k', '-shortest');
     }
 
     command
@@ -1189,10 +1190,45 @@ async function generateSystemNarrationAudioWindows(text, voiceName, tempDir, pro
   return audioPath;
 }
 
+async function generateXttsNarrationAudio(text, { language, voiceId }, tempDir, progressCallback) {
+  if (progressCallback) {
+    progressCallback({
+      type: 'audio',
+      message: 'Generating narration audio (XTTS)...',
+    });
+  }
+
+  const audioPath = path.join(tempDir, `narration-${Date.now()}.wav`);
+  await xttsManager.synthesizeWav({
+    text: String(text || ''),
+    language: language || 'en',
+    voiceId: voiceId || '',
+    outPath: audioPath,
+  });
+
+  if (progressCallback) {
+    progressCallback({
+      type: 'audio',
+      message: 'Narration audio generated (XTTS).',
+    });
+  }
+
+  return audioPath;
+}
+
 async function generateNarrationAudio(text, settings, tempDir, progressCallback) {
   const provider = settings && settings.provider ? String(settings.provider).toLowerCase() : 'google';
   const language = settings && settings.language ? String(settings.language) : 'en';
   const voiceName = settings && settings.voiceName ? String(settings.voiceName) : '';
+
+  if (provider === 'xtts') {
+    return await generateXttsNarrationAudio(
+      text,
+      { language, voiceId: voiceName },
+      tempDir,
+      progressCallback
+    );
+  }
 
   if (provider === 'system') {
     if (process.platform === 'win32') {

@@ -23,5 +23,25 @@ dist-ssr
 *.sln
 *.sw?
 
-package-lock.json
-package.json
+# XTTS - Large binary files and build artifacts
+xtts/bin/
+xtts/server/.venv/
+xtts/server/build/
+xtts/server/dist/
+xtts/models/
+xtts/server/__pycache__/
+xtts/server/**/__pycache__/
+
+# Python
+*.pyc
+*.pyo
+*.pyd
+__pycache__/
+*.egg-info/
+.pytest_cache/
+
+# OS
+Thumbs.db
+*.swp
+*.swo
+*~

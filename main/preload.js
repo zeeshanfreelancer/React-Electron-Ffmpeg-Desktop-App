@@ -40,6 +40,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
   // TTS voices (system voices)
   listTtsVoices: () => ipcRenderer.invoke('list-tts-voices'),
 
+  // XTTS (bundled) voices
+  xttsListVoices: () => ipcRenderer.invoke('xtts-list-voices'),
+
   // Event listeners
   onScrollingVideoProgress: (callback) =>
     ipcRenderer.on('scrolling-video-progress', (_, progress) => callback(progress)),
