@@ -18,11 +18,40 @@ def parse_args():
     return p.parse_args()
 
 
-def list_voice_wavs(voices_dir: Path):
+def list_voice_audio_files(voices_dir: Path):
+    """List all supported audio files in the voices directory.
+    Supports: .wav, .mp3, .flac, .ogg, .m4a, .aac
+    """
     if not voices_dir.exists():
         return []
-    wavs = sorted([p for p in voices_dir.glob("*.wav") if p.is_file()])
-    return [{"id": p.stem, "label": p.stem, "filename": p.name} for p in wavs]
+    
+    # Supported audio formats (soundfile supports: wav, flac, ogg)
+    # For MP3/M4A/AAC, we'll rely on Coqui TTS's internal handling
+    audio_extensions = ['.wav', '.mp3', '.flac', '.ogg', '.m4a', '.aac']
+    
+    audio_files = []
+    for ext in audio_extensions:
+        audio_files.extend([p for p in voices_dir.glob(f"*{ext}") if p.is_file()])
+    
+    # Sort by stem (base name) first, then by extension preference (prefer .wav)
+    ext_priority = {'.wav': 0, '.flac': 1, '.ogg': 2, '.mp3': 3, '.m4a': 4, '.aac': 5}
+    audio_files.sort(key=lambda p: (p.stem.lower(), ext_priority.get(p.suffix.lower(), 99)))
+    
+    # If multiple formats exist for the same stem, prefer WAV
+    seen_stems = {}
+    unique_files = []
+    for p in audio_files:
+        stem = p.stem
+        if stem not in seen_stems:
+            seen_stems[stem] = p
+            unique_files.append(p)
+        elif p.suffix.lower() == '.wav':
+            # Replace with WAV if we found a WAV version
+            idx = unique_files.index(seen_stems[stem])
+            unique_files[idx] = p
+            seen_stems[stem] = p
+    
+    return [{"id": p.stem, "label": p.stem, "filename": p.name} for p in unique_files]
 
 
 def load_xtts(models_dir: Path):
@@ -53,7 +82,7 @@ def health():
 @app.get("/voices")
 def voices():
     assert voices_dir_path is not None
-    return {"voices": list_voice_wavs(voices_dir_path)}
+    return {"voices": list_voice_audio_files(voices_dir_path)}
 
 
 @app.post("/tts")
@@ -62,7 +91,8 @@ async def tts_endpoint(payload: dict):
     payload:
       text: str
       language: str (e.g. 'en', 'es', ...)
-      voiceId: str (stem of wav in voices dir) OR omit for default voice
+      voiceId: str (stem of audio file in voices dir) OR omit for default voice
+              Supports: .wav, .mp3, .flac, .ogg, .m4a, .aac
     returns: audio/wav bytes
     """
     global tts
@@ -85,8 +115,27 @@ async def tts_endpoint(payload: dict):
     speaker_wav = None
     if voice_id:
         assert voices_dir_path is not None
-        candidate = voices_dir_path / f"{voice_id}.wav"
-        if not candidate.exists():
+        # Try to find the voice file by checking common audio formats
+        # Priority: check if a specific filename was provided (for backward compatibility),
+        # otherwise try common extensions
+        candidate = None
+        
+        # First, get the list of available voices to find the exact filename
+        available_voices = list_voice_audio_files(voices_dir_path)
+        voice_match = next((v for v in available_voices if v["id"] == voice_id), None)
+        
+        if voice_match:
+            # Use the exact filename from the voices list
+            candidate = voices_dir_path / voice_match["filename"]
+        else:
+            # Fallback: try common extensions in order of preference
+            for ext in ['.wav', '.flac', '.ogg', '.mp3', '.m4a', '.aac']:
+                test_path = voices_dir_path / f"{voice_id}{ext}"
+                if test_path.exists():
+                    candidate = test_path
+                    break
+        
+        if not candidate or not candidate.exists():
             raise HTTPException(status_code=400, detail=f"Voice '{voice_id}' not found")
         speaker_wav = str(candidate)
 

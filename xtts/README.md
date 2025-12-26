@@ -65,8 +65,9 @@ copy .\dist\xtts-server.exe ..\bin\xtts-server.exe -Force
 
 ## Voices
 
-Add voice reference WAVs to `xtts/voices/` (short, clean voice clips work best).
+Add voice reference audio files to `xtts/voices/` (short, clean voice clips work best).
+Supported formats: `.wav`, `.mp3`, `.flac`, `.ogg`, `.m4a`, `.aac`
 
-The app will show them in a dropdown and pass the selected WAV to XTTS for cloning.
+The app will show them in a dropdown and pass the selected audio file to XTTS for cloning.
 
 

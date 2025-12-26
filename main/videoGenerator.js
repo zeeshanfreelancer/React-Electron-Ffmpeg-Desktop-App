@@ -1164,15 +1164,15 @@ function isRetryableNetworkError(error) {
 // Generate narration audio using Google TTS with retry logic
 async function generateSystemNarrationAudioWindows(text, voiceName, tempDir, progressCallback) {
   const reportProgress = (progress, message) => {
-    if (progressCallback) {
-      progressCallback({
-        type: 'audio',
+  if (progressCallback) {
+    progressCallback({
+      type: 'audio',
         progress: Math.max(0, Math.min(100, progress)),
         message: message,
-      });
-    }
+    });
+  }
   };
-  
+
   reportProgress(10, 'Initializing system TTS...');
   const audioPath = path.join(tempDir, `narration-${Date.now()}.wav`);
   const safeText = String(text || '');
@@ -1191,7 +1191,7 @@ async function generateSystemNarrationAudioWindows(text, voiceName, tempDir, pro
   const script = scriptParts.join(' ');
 
   reportProgress(30, 'Generating audio with system voice...');
-  
+
   await new Promise((resolve, reject) => {
     const startTime = Date.now();
     const estimatedDuration = Math.max(2000, text.length * 50); // Rough estimate: ~50ms per character
@@ -1270,13 +1270,13 @@ async function generateNarrationAudio(text, settings, tempDir, progressCallback)
   }
 
   const reportProgress = (progress, message) => {
-    if (progressCallback) {
-      progressCallback({
-        type: 'audio',
+  if (progressCallback) {
+    progressCallback({
+      type: 'audio',
         progress: Math.max(0, Math.min(100, progress)),
         message: message,
-      });
-    }
+    });
+  }
   };
 
   reportProgress(10, 'Connecting to Google TTS service...');
