@@ -19,11 +19,12 @@ function ScrollingTextVideo() {
   const [texts, setTexts] = useState([{ text: '', x: null, y: null }]);
   const [audioText, setAudioText] = useState('');
   const [audioLanguage, setAudioLanguage] = useState('en');
-  const [audioProvider, setAudioProvider] = useState('google'); // google | system
+  const [audioProvider, setAudioProvider] = useState('xtts'); // google | system | xtts (default: xtts)
   const [ttsVoices, setTtsVoices] = useState([]); // [{name,culture,gender,age}]
   const [selectedTtsVoiceName, setSelectedTtsVoiceName] = useState('');
   const [xttsVoices, setXttsVoices] = useState([]); // [{id,label,filename}]
   const [xttsVoicesError, setXttsVoicesError] = useState('');
+  const [xttsVoicesLoading, setXttsVoicesLoading] = useState(false); // Loading state for XTTS voices
   const [selectedXttsVoiceId, setSelectedXttsVoiceId] = useState('');
   const [width, setWidth] = useState(1920);
   const [height, setHeight] = useState(1080);
@@ -83,6 +84,11 @@ function ScrollingTextVideo() {
   const [isGenerating, setIsGenerating] = useState(false);
   const [progress, setProgress] = useState(0);
   const [progressMessage, setProgressMessage] = useState('');
+  // Separate progress for audio and video
+  const [audioProgress, setAudioProgress] = useState(0);
+  const [audioProgressMessage, setAudioProgressMessage] = useState('');
+  const [videoProgress, setVideoProgress] = useState(0);
+  const [videoProgressMessage, setVideoProgressMessage] = useState('');
   // Timing (Advanced generator): elapsed + ETA based on observed progress rate
   const [scrollingElapsedSec, setScrollingElapsedSec] = useState(0);
   const [scrollingEtaSec, setScrollingEtaSec] = useState(null); // null = unknown / not enough info yet
@@ -190,13 +196,18 @@ function ScrollingTextVideo() {
   // Load XTTS voices when provider is selected (may start XTTS sidecar)
   useEffect(() => {
     let cancelled = false;
-    if (audioProvider !== 'xtts') return () => {};
+    if (audioProvider !== 'xtts') {
+      setXttsVoicesLoading(false);
+      return () => {};
+    }
     (async () => {
       try {
         setXttsVoicesError('');
+        setXttsVoicesLoading(true); // Set loading state
         if (!window.electronAPI || !window.electronAPI.xttsListVoices) {
           setXttsVoices([]);
           setXttsVoicesError('XTTS API is not available (preload not loaded).');
+          setXttsVoicesLoading(false);
           return;
         }
         console.log('[XTTS] Fetching voices...');
@@ -213,16 +224,19 @@ function ScrollingTextVideo() {
           console.error('[XTTS] Error from server:', result.error);
           setXttsVoicesError(String(result.error || ''));
         }
+        setXttsVoicesLoading(false); // Clear loading state
       } catch (err) {
         console.error('[XTTS] Exception:', err);
         if (!cancelled) {
           setXttsVoices([]);
           setXttsVoicesError(err?.message ? String(err.message) : String(err));
         }
+        setXttsVoicesLoading(false); // Clear loading state on error
       }
     })();
     return () => {
       cancelled = true;
+      setXttsVoicesLoading(false);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [audioProvider]);
@@ -269,27 +283,43 @@ function ScrollingTextVideo() {
 
       if (progressData.type === 'frame' || progressData.type === 'batch') {
         if (canUpdateProgress) {
+          setVideoProgress(progressData.progress);
+          // Also update main progress for backward compatibility
           setProgress(progressData.progress);
         }
+        setVideoProgressMessage(progressData.message || `Processing: ${progressData.current}/${progressData.total}`);
         setProgressMessage(progressData.message || `Processing: ${progressData.current}/${progressData.total}`);
       } else if (progressData.type === 'encoding') {
         if (canUpdateProgress) {
+          setVideoProgress(progressData.progress);
           setProgress(progressData.progress);
         }
+        setVideoProgressMessage(progressData.message || 'Encoding video...');
         setProgressMessage(progressData.message || 'Encoding video...');
       } else if (progressData.type === 'audio') {
         if (canUpdateProgress) {
-          setProgress(progressData.progress);
+          setAudioProgress(progressData.progress || 0);
+          // Don't update main progress for audio (video has its own bar)
         }
-        setProgressMessage(progressData.message || 'Generating narration audio...');
+        setAudioProgressMessage(progressData.message || 'Generating narration audio...');
       } else if (progressData.type === 'audio-mix') {
         if (canUpdateProgress) {
+          // Audio mixing is part of video finalization
+          setVideoProgress(progressData.progress);
           setProgress(progressData.progress);
         }
+        setVideoProgressMessage(progressData.message || 'Mixing audio with video...');
         setProgressMessage(progressData.message || 'Mixing audio with video...');
       } else if (progressData.message) {
         if (canUpdateProgress) {
           setProgress(progressData.progress);
+          // Try to determine if it's audio or video based on message
+          const msg = progressData.message.toLowerCase();
+          if (msg.includes('audio') || msg.includes('narration') || msg.includes('tts')) {
+            setAudioProgress(progressData.progress);
+          } else {
+            setVideoProgress(progressData.progress);
+          }
         }
         setProgressMessage(progressData.message);
       }
@@ -334,6 +364,10 @@ function ScrollingTextVideo() {
       setIsGenerating(false);
       setProgress(100);
       setProgressMessage('');
+      setAudioProgress(100);
+      setAudioProgressMessage('');
+      setVideoProgress(100);
+      setVideoProgressMessage('');
       setScrollingEtaSec(0);
       setScrollingStatus(`✅ Video created successfully: ${path}`);
     });
@@ -342,6 +376,10 @@ function ScrollingTextVideo() {
       setIsGenerating(false);
       setProgress(0);
       setProgressMessage('');
+      setAudioProgress(0);
+      setAudioProgressMessage('');
+      setVideoProgress(0);
+      setVideoProgressMessage('');
       setScrollingEtaSec(null);
       setScrollingStatus(`❌ Error: ${error}`);
     });
@@ -350,6 +388,10 @@ function ScrollingTextVideo() {
       setIsGenerating(false);
       setProgress(0);
       setProgressMessage('');
+      setAudioProgress(0);
+      setAudioProgressMessage('');
+      setVideoProgress(0);
+      setVideoProgressMessage('');
       setScrollingEtaSec(null);
       setScrollingStatus('⚠️ Video generation cancelled');
     });
@@ -1318,6 +1360,10 @@ function ScrollingTextVideo() {
     setIsGenerating(true);
     setProgress(0);
     setProgressMessage('Initializing...');
+    setAudioProgress(0);
+    setAudioProgressMessage('');
+    setVideoProgress(0);
+    setVideoProgressMessage('');
     setScrollingStatus('🎬 Generating video...');
     resetScrollingTiming();
 
@@ -1424,6 +1470,7 @@ function ScrollingTextVideo() {
     selectedTtsVoiceName,
     xttsVoices,
     xttsVoicesError,
+    xttsVoicesLoading,
     selectedXttsVoiceId,
     width,
     height,
@@ -1458,6 +1505,10 @@ function ScrollingTextVideo() {
     isGenerating,
     progress,
     progressMessage,
+    audioProgress,
+    audioProgressMessage,
+    videoProgress,
+    videoProgressMessage,
     scrollingElapsedSec,
     scrollingEtaSec,
     scrollingStatus,

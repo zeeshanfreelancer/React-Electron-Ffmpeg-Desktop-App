@@ -278,21 +278,10 @@ async function generateScrollingVideo(options, progressCallback, shouldCancel) {
     const narrationLanguage = narrationOptions.language || 'en';
     const narrationProvider = (narrationOptions.provider || 'google').toLowerCase(); // google | system
     const narrationVoice = narrationOptions.voiceName || narrationOptions.voice || null;
-    let narrationAudioPath = null;
 
     // Background music
     const bgMusicOptions = options.backgroundMusic || {};
     const hasBgMusic = Boolean(bgMusicOptions.enabled && bgMusicOptions.path);
-
-    if (shouldGenerateNarration) {
-      narrationAudioPath = await generateNarrationAudio(
-        narrationOptions.text.trim(),
-        { provider: narrationProvider, language: narrationLanguage, voiceName: narrationVoice },
-        tempDir,
-        progressCallback
-      );
-    }
-
     let bgMusicPath = null;
     if (hasBgMusic) {
       bgMusicPath = bgMusicOptions.path;
@@ -307,6 +296,26 @@ async function generateScrollingVideo(options, progressCallback, shouldCancel) {
     // Create canvas
     const canvas = new Canvas(width, height);
     const ctx = canvas.getContext('2d');
+    
+    // Start audio generation in parallel with video frame rendering
+    // This significantly speeds up generation since they don't depend on each other
+    let narrationAudioPath = null;
+    const audioGenerationPromise = shouldGenerateNarration
+      ? generateNarrationAudio(
+          narrationOptions.text.trim(),
+          { provider: narrationProvider, language: narrationLanguage, voiceName: narrationVoice },
+          tempDir,
+          progressCallback
+        ).then((path) => {
+          narrationAudioPath = path;
+          return path;
+        }).catch((err) => {
+          console.error('[videoGenerator] Audio generation failed:', err);
+          // Don't throw - allow video generation to continue even if audio fails
+          // We'll just skip audio mixing later
+          return null;
+        })
+      : Promise.resolve(null);
 
     // IMPORTANT:
     // Frame rendering is very CPU-heavy (canvas draw + toBufferSync). The previous implementation tried to
@@ -663,6 +672,24 @@ async function generateScrollingVideo(options, progressCallback, shouldCancel) {
       throw new Error('Video generation cancelled');
     }
 
+    // Wait for audio generation to complete (if it was started in parallel)
+    // Audio should be ready by now since frame rendering typically takes longer
+    if (shouldGenerateNarration) {
+      try {
+        narrationAudioPath = await audioGenerationPromise;
+        if (progressCallback) {
+          progressCallback({
+            type: 'audio',
+            progress: narrationAudioPath ? 100 : 0,
+            message: narrationAudioPath ? 'Audio generation complete' : 'Audio generation failed, continuing without audio',
+          });
+        }
+      } catch (err) {
+        console.warn('[videoGenerator] Audio generation failed, continuing without audio:', err.message);
+        narrationAudioPath = null;
+      }
+    }
+
     // Determine output path
     const timestamp = Date.now();
     const outputDir = outputDirectory || app.getPath('desktop');
@@ -684,9 +711,9 @@ async function generateScrollingVideo(options, progressCallback, shouldCancel) {
       totalFramesRendered
     );
 
-    // Mix audio if needed
+    // Mix audio if needed (only if audio was successfully generated)
     let finalVideoPath = videoOutputPath;
-    if (shouldGenerateNarration || hasBgMusic) {
+    if ((shouldGenerateNarration && narrationAudioPath) || hasBgMusic) {
       finalVideoPath = path.join(tempDir, `${baseFileName}-with-audio.${safeExportFormat}`);
       await mixAllAudio(
         videoOutputPath,
@@ -1136,13 +1163,17 @@ function isRetryableNetworkError(error) {
 
 // Generate narration audio using Google TTS with retry logic
 async function generateSystemNarrationAudioWindows(text, voiceName, tempDir, progressCallback) {
-  if (progressCallback) {
-    progressCallback({
-      type: 'audio',
-      message: 'Generating narration audio (System voice)...',
-    });
-  }
-
+  const reportProgress = (progress, message) => {
+    if (progressCallback) {
+      progressCallback({
+        type: 'audio',
+        progress: Math.max(0, Math.min(100, progress)),
+        message: message,
+      });
+    }
+  };
+  
+  reportProgress(10, 'Initializing system TTS...');
   const audioPath = path.join(tempDir, `narration-${Date.now()}.wav`);
   const safeText = String(text || '');
   const safeVoice = voiceName ? String(voiceName) : '';
@@ -1159,15 +1190,29 @@ async function generateSystemNarrationAudioWindows(text, voiceName, tempDir, pro
 
   const script = scriptParts.join(' ');
 
+  reportProgress(30, 'Generating audio with system voice...');
+  
   await new Promise((resolve, reject) => {
+    const startTime = Date.now();
+    const estimatedDuration = Math.max(2000, text.length * 50); // Rough estimate: ~50ms per character
+    
+    // Simulate progress based on time elapsed (since we can't track actual progress)
+    const progressInterval = setInterval(() => {
+      const elapsed = Date.now() - startTime;
+      const progress = Math.min(90, 30 + (elapsed / estimatedDuration) * 60);
+      reportProgress(progress, 'Generating audio with system voice...');
+    }, 200);
+    
     childProcess.execFile(
       'powershell.exe',
       ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', script],
       { windowsHide: true, maxBuffer: 5 * 1024 * 1024 },
       (err, _stdout, stderr) => {
+        clearInterval(progressInterval);
         if (err) {
           reject(new Error(stderr || err.message));
         } else {
+          reportProgress(95, 'Saving audio file...');
           resolve();
         }
       }
@@ -1180,38 +1225,19 @@ async function generateSystemNarrationAudioWindows(text, voiceName, tempDir, pro
     throw new Error('System narration audio file was not created successfully');
   }
 
-  if (progressCallback) {
-    progressCallback({
-      type: 'audio',
-      message: 'Narration audio generated (System voice).',
-    });
-  }
-
+  reportProgress(100, 'Audio generation complete');
   return audioPath;
 }
 
 async function generateXttsNarrationAudio(text, { language, voiceId }, tempDir, progressCallback) {
-  if (progressCallback) {
-    progressCallback({
-      type: 'audio',
-      message: 'Generating narration audio (XTTS)...',
-    });
-  }
-
   const audioPath = path.join(tempDir, `narration-${Date.now()}.wav`);
   await xttsManager.synthesizeWav({
     text: String(text || ''),
     language: language || 'en',
     voiceId: voiceId || '',
     outPath: audioPath,
+    progressCallback: progressCallback, // Pass through progress callback
   });
-
-  if (progressCallback) {
-    progressCallback({
-      type: 'audio',
-      message: 'Narration audio generated (XTTS).',
-    });
-  }
 
   return audioPath;
 }
@@ -1243,13 +1269,17 @@ async function generateNarrationAudio(text, settings, tempDir, progressCallback)
     }
   }
 
-  if (progressCallback) {
-    progressCallback({
-      type: 'audio',
-      message: 'Generating narration audio...',
-    });
-  }
+  const reportProgress = (progress, message) => {
+    if (progressCallback) {
+      progressCallback({
+        type: 'audio',
+        progress: Math.max(0, Math.min(100, progress)),
+        message: message,
+      });
+    }
+  };
 
+  reportProgress(10, 'Connecting to Google TTS service...');
   const audioPath = path.join(tempDir, `narration-${Date.now()}.mp3`);
   const maxRetries = 3;
   const retryDelay = 2000;
@@ -1281,12 +1311,7 @@ async function generateNarrationAudio(text, settings, tempDir, progressCallback)
         throw new Error('Audio file was not created successfully');
       }
 
-      if (progressCallback) {
-        progressCallback({
-          type: 'audio',
-          message: 'Narration audio generated successfully.',
-        });
-      }
+      reportProgress(100, 'Audio generation complete');
       return audioPath;
     } catch (error) {
       lastError = error;

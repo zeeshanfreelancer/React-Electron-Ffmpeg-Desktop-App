@@ -53,7 +53,7 @@ function getPaths() {
   };
 }
 
-function httpRequest({ method, url, headers, body, timeoutMs = 8000 }) {
+function httpRequest({ method, url, headers, body, timeoutMs = 8000, onProgress }) {
   return new Promise((resolve, reject) => {
     const u = new URL(url);
     const req = http.request(
@@ -67,7 +67,18 @@ function httpRequest({ method, url, headers, body, timeoutMs = 8000 }) {
       },
       (res) => {
         const chunks = [];
-        res.on('data', (d) => chunks.push(d));
+        const contentLength = parseInt(res.headers['content-length'] || '0', 10);
+        let receivedBytes = 0;
+        
+        res.on('data', (d) => {
+          chunks.push(d);
+          receivedBytes += d.length;
+          // Call progress callback if provided
+          if (onProgress && contentLength > 0) {
+            onProgress(receivedBytes, contentLength);
+          }
+        });
+        
         res.on('end', () => {
           resolve({
             status: res.statusCode || 0,
@@ -174,14 +185,29 @@ function spawnXttsServer({ port }) {
     });
   }
   
+  let stderrBuffer = '';
   if (xttsProc.stderr) {
     xttsProc.stderr.on('data', (data) => {
-      console.error('[XTTS Server stderr]:', data.toString().trim());
+      const text = data.toString();
+      stderrBuffer += text;
+      console.error('[XTTS Server stderr]:', text.trim());
+      
+      // Check for port binding errors
+      if (text.includes('error while attempting to bind') || 
+          text.includes('EADDRINUSE') || 
+          text.includes('only one usage of each socket address')) {
+        console.warn('[xttsManager] Port binding failed, server will exit. Will try next port.');
+      }
     });
   }
 
   xttsProc.on('exit', (code, signal) => {
     console.log('[xttsManager] Server process exited. Code:', code, 'Signal:', signal);
+    // If exit code is 1 and we see port binding error, this is expected - we'll try next port
+    if (code === 1 && (stderrBuffer.includes('error while attempting to bind') || 
+                       stderrBuffer.includes('EADDRINUSE'))) {
+      console.log('[xttsManager] Port was in use, this is expected. Will try next port.');
+    }
     xttsProc = null;
     xttsBaseUrl = null;
     xttsStarting = false;
@@ -210,12 +236,20 @@ async function waitForHealthOrExit(baseUrl, proc, { timeoutMs = 60000 } = {}) {
   return false;
 }
 
-async function ensureRunning() {
-  console.log('[xttsManager] ensureRunning() called');
+async function ensureRunning({ preWarmModel = false } = {}) {
+  console.log('[xttsManager] ensureRunning() called', { preWarmModel });
   if (xttsStarting && xttsBaseUrl) {
     console.log('[xttsManager] Already starting, waiting for health:', xttsBaseUrl);
     const ok = await waitForHealthOrExit(xttsBaseUrl, xttsProc, { timeoutMs: 60000 });
-    if (ok) return { baseUrl: xttsBaseUrl, port: xttsPort };
+    if (ok) {
+      // Optionally pre-warm model by making a small test request
+      if (preWarmModel) {
+        await preWarmXttsModel(xttsBaseUrl).catch((err) => {
+          console.warn('[xttsManager] Pre-warm failed (non-fatal):', err.message);
+        });
+      }
+      return { baseUrl: xttsBaseUrl, port: xttsPort };
+    }
   }
   // If we already have a base URL and it's healthy, verify it's actually working
   if (xttsBaseUrl && (await isHealthy(xttsBaseUrl))) {
@@ -253,6 +287,12 @@ async function ensureRunning() {
       console.log('[xttsManager] Found healthy server on port:', p);
       xttsPort = p;
       xttsBaseUrl = candidate;
+      // Optionally pre-warm model if requested
+      if (preWarmModel) {
+        await preWarmXttsModel(xttsBaseUrl).catch((err) => {
+          console.warn('[xttsManager] Pre-warm failed (non-fatal):', err.message);
+        });
+      }
       return { baseUrl: xttsBaseUrl, port: xttsPort };
     }
 
@@ -280,19 +320,81 @@ async function ensureRunning() {
     xttsStarting = true;
     xttsBaseUrl = candidate;
     xttsPort = p;
+    
+    // Wait a short time to detect immediate port binding failures
+    await new Promise((resolve) => setTimeout(resolve, 1500));
+    
+    // Check if process already exited (port binding failure)
+    if (xttsProc && (xttsProc.exitCode !== null || xttsProc.killed)) {
+      const exitCode = xttsProc.exitCode;
+      console.log('[xttsManager] Server exited immediately (exit code:', exitCode, '), likely port conflict. Trying next port...');
+      xttsProc = null;
+      xttsBaseUrl = null;
+      xttsStarting = false;
+      continue; // Try next port
+    }
+    
     // eslint-disable-next-line no-await-in-loop
     const ok = await waitForHealthOrExit(candidate, xttsProc, { timeoutMs: 60000 });
     if (ok) {
       console.log('[xttsManager] Server became healthy on port:', p);
       xttsStarting = false;
+      // Optionally pre-warm model if requested
+      if (preWarmModel) {
+        await preWarmXttsModel(xttsBaseUrl).catch((err) => {
+          console.warn('[xttsManager] Pre-warm failed (non-fatal):', err.message);
+        });
+      }
       return { baseUrl: xttsBaseUrl, port: xttsPort };
     }
     console.log('[xttsManager] Server did not become healthy on port:', p);
+    // Clean up failed process
+    if (xttsProc) {
+      try {
+        if (!xttsProc.killed) {
+          xttsProc.kill();
+        }
+      } catch (_) {
+        // ignore
+      }
+      xttsProc = null;
+    }
+    xttsBaseUrl = null;
     xttsStarting = false;
   }
 
   console.error('[xttsManager] Failed to start XTTS server after trying all ports');
   throw new Error('Failed to start XTTS server (no available port / server did not become healthy).');
+}
+
+// Pre-warm the XTTS model by making a small test request
+// This loads the model into memory so subsequent requests are faster
+async function preWarmXttsModel(baseUrl) {
+  console.log('[xttsManager] Pre-warming XTTS model...');
+  try {
+    const body = Buffer.from(
+      JSON.stringify({
+        text: 'test',
+        language: 'en',
+        voiceId: '',
+      }),
+      'utf-8'
+    );
+    // Use shorter timeout for pre-warm - if it takes too long, skip it
+    const resp = await httpRequest({
+      method: 'POST',
+      url: `${baseUrl}/tts`,
+      headers: { 'content-type': 'application/json', 'content-length': String(body.length) },
+      body,
+      timeoutMs: 60000, // 1 minute max for pre-warm
+    });
+    if (resp.status >= 200 && resp.status < 300) {
+      console.log('[xttsManager] Model pre-warmed successfully');
+    }
+  } catch (err) {
+    console.warn('[xttsManager] Pre-warm request failed:', err.message);
+    throw err;
+  }
 }
 
 async function listVoices() {
@@ -317,16 +419,27 @@ async function listVoices() {
   }
 }
 
-async function synthesizeWav({ text, language = 'en', voiceId = '', outPath }) {
+async function synthesizeWav({ text, language = 'en', voiceId = '', outPath, progressCallback }) {
   // Try once, and if we get a timeout or initialization error, restart server and retry
   const maxRetries = 2;
   let lastError = null;
+  
+  const reportProgress = (progress, message) => {
+    if (progressCallback) {
+      progressCallback({
+        type: 'audio',
+        progress: Math.max(0, Math.min(100, progress)),
+        message: message,
+      });
+    }
+  };
   
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     try {
       // If this is a retry after failure, force restart the server
       if (attempt > 0) {
         console.log('[xttsManager] Restarting XTTS server due to previous failure...');
+        reportProgress(5, 'Restarting XTTS server...');
         stop();
         // Clear the base URL to force a fresh server start
         xttsBaseUrl = null;
@@ -335,7 +448,13 @@ async function synthesizeWav({ text, language = 'en', voiceId = '', outPath }) {
         await new Promise((r) => setTimeout(r, 1000));
       }
       
+      // Stage 1: Ensure server is running (10-30% depending on if it needs to start)
+      reportProgress(10, 'Connecting to XTTS server...');
       const { baseUrl } = await ensureRunning();
+      reportProgress(30, 'XTTS server ready');
+      
+      // Stage 2: Prepare request (30-35%)
+      reportProgress(35, 'Preparing audio generation request...');
       const body = Buffer.from(
         JSON.stringify({
           text,
@@ -344,13 +463,31 @@ async function synthesizeWav({ text, language = 'en', voiceId = '', outPath }) {
         }),
         'utf-8'
       );
+      
+      // Stage 3: Send request and wait for response (35-95%)
+      // Model loading (first time) takes most of the time
+      reportProgress(40, 'Generating audio (this may take 1-2 minutes on first run)...');
+      
+      // Track download progress if possible (estimate based on text length)
+      const textLength = text.length;
+      const estimatedCharsPerPercent = Math.max(1, Math.ceil(textLength / 55)); // Rough estimate: 40-50% for generation, 50-95% for streaming
+      
       const resp = await httpRequest({
         method: 'POST',
         url: `${baseUrl}/tts`,
         headers: { 'content-type': 'application/json', 'content-length': String(body.length) },
         body,
         timeoutMs: 180000, // 3 minutes - model initialization can take a while
+        onProgress: (bytesReceived, totalBytes) => {
+          // Estimate progress: 40% (model load) + 60% (audio generation/download)
+          if (totalBytes > 0) {
+            const downloadProgress = (bytesReceived / totalBytes) * 60; // 60% of total is download
+            const totalProgress = 40 + downloadProgress;
+            reportProgress(totalProgress, `Generating audio... ${Math.round(downloadProgress)}%`);
+          }
+        },
       });
+      
       if (resp.status < 200 || resp.status >= 300) {
         let detail = '';
         try {
@@ -369,7 +506,11 @@ async function synthesizeWav({ text, language = 'en', voiceId = '', outPath }) {
         
         throw new Error(errorMsg);
       }
+      
+      // Stage 4: Save audio file (95-100%)
+      reportProgress(95, 'Saving audio file...');
       fs.writeFileSync(outPath, resp.body);
+      reportProgress(100, 'Audio generation complete');
       return outPath;
     } catch (err) {
       // If it's a timeout and we haven't retried yet, restart and retry

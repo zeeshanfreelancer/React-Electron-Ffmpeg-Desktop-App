@@ -150,8 +150,37 @@ function createWindow() {
     },
   });
 
-  // Completely remove the menu bar
-  win.setMenu(null);
+  // Add menu with DevTools option
+  const template = [
+    {
+      label: 'View',
+      submenu: [
+        {
+          label: 'Toggle Developer Tools',
+          accelerator: 'F12',
+          click: () => {
+            win.webContents.toggleDevTools();
+          },
+        },
+        {
+          label: 'Reload',
+          accelerator: 'Ctrl+R',
+          click: () => {
+            win.reload();
+          },
+        },
+      ],
+    },
+  ];
+  const menu = Menu.buildFromTemplate(template);
+  win.setMenu(menu);
+
+  // Also add keyboard shortcut for F12 (works even if menu is hidden)
+  win.webContents.on('before-input-event', (event, input) => {
+    if (input.key === 'F12') {
+      win.webContents.toggleDevTools();
+    }
+  });
 
   // Helpful diagnostics if the renderer fails to load (common cause of "blank window" in packaged apps)
   win.webContents.on('did-fail-load', async (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
@@ -793,6 +822,16 @@ app.whenReady().then(() => {
   youtubeUploader.init({ storageDir: path.join(app.getPath('userData'), 'youtube') });
   registerIpcHandlers();
   createWindow();
+  
+  // Pre-warm XTTS model on app startup (in background, non-blocking)
+  // This loads the model into memory so first audio generation is faster
+  setTimeout(() => {
+    console.log('[main] Pre-warming XTTS model on startup...');
+    xttsManager.ensureRunning({ preWarmModel: true }).catch((err) => {
+      console.warn('[main] XTTS pre-warm failed (non-fatal):', err.message);
+      // Non-fatal - user can still use XTTS, it will just load on first use
+    });
+  }, 2000); // Wait 2 seconds after app ready to not block startup
 
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) {

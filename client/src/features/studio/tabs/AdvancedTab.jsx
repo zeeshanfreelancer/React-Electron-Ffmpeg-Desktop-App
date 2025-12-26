@@ -34,6 +34,7 @@ export default function AdvancedTab() {
     selectedTtsVoiceName,
     xttsVoices,
     xttsVoicesError,
+    xttsVoicesLoading,
     selectedXttsVoiceId,
     backgroundMusic,
     exportFormat,
@@ -45,6 +46,10 @@ export default function AdvancedTab() {
     exportThumbnail,
     progress,
     progressMessage,
+    audioProgress,
+    audioProgressMessage,
+    videoProgress,
+    videoProgressMessage,
     scrollingElapsedSec,
     scrollingEtaSec,
     scrollingStatus,
@@ -603,22 +608,56 @@ export default function AdvancedTab() {
               {audioProvider === 'xtts' ? (
                 <>
                   <label>XTTS Voice</label>
-                  <select
-                    value={selectedXttsVoiceId}
-                    onChange={(e) => setSelectedXttsVoiceId(e.target.value)}
-                    disabled={isGenerating || !xttsVoices || xttsVoices.length === 0}
-                    className="audio-control-select"
-                  >
-                    {xttsVoices && xttsVoices.length > 0 ? (
-                      xttsVoices.map((v) => (
-                        <option key={v.id} value={v.id}>
-                          {v.label || v.id}
-                        </option>
-                      ))
-                    ) : (
-                      <option value="">No XTTS voices found</option>
+                  <div style={{ position: 'relative' }}>
+                    <select
+                      value={selectedXttsVoiceId}
+                      onChange={(e) => setSelectedXttsVoiceId(e.target.value)}
+                      disabled={isGenerating || xttsVoicesLoading || !xttsVoices || xttsVoices.length === 0}
+                      className="audio-control-select"
+                      style={{
+                        opacity: xttsVoicesLoading ? 0.6 : 1,
+                        backgroundImage: xttsVoicesLoading 
+                          ? 'none' 
+                          : undefined,
+                      }}
+                    >
+                      {xttsVoicesLoading ? (
+                        <option value="">Loading voices...</option>
+                      ) : xttsVoices && xttsVoices.length > 0 ? (
+                        xttsVoices.map((v) => (
+                          <option key={v.id} value={v.id}>
+                            {v.label || v.id}
+                          </option>
+                        ))
+                      ) : (
+                        <option value="">No XTTS voices found</option>
+                      )}
+                    </select>
+                    {xttsVoicesLoading && (
+                      <div
+                        style={{
+                          position: 'absolute',
+                          right: '30px',
+                          top: '50%',
+                          transform: 'translateY(-50%)',
+                          pointerEvents: 'none',
+                          width: '16px',
+                          height: '16px',
+                        }}
+                      >
+                        <div
+                          style={{
+                            width: '16px',
+                            height: '16px',
+                            border: '2px solid #f3f3f3',
+                            borderTop: '2px solid #4a90e2',
+                            borderRadius: '50%',
+                            animation: 'spin 1s linear infinite',
+                          }}
+                        />
+                      </div>
                     )}
-                  </select>
+                  </div>
                   {xttsVoicesError ? (
                     <small style={{ color: '#b00020', fontSize: '11px', marginTop: '4px', display: 'block' }}>
                       XTTS error: {xttsVoicesError}
@@ -813,16 +852,59 @@ export default function AdvancedTab() {
         {isGenerating ? '⏳ Generating...' : '🎥 Generate Video'}
       </button>
 
-      {/* Progress Bar */}
+      {/* Progress Bars - Separate for Audio and Video */}
       {isGenerating && (
         <div className="progress-section">
-          <div className="progress-bar-container">
-            <div className="progress-bar-fill" style={{ width: `${progress}%` }}>
-              <span className="progress-text">{progress}%</span>
+          {/* Audio Progress Bar (only show if narration is enabled) */}
+          {audioText && audioText.trim().length > 0 && (
+            <div className="progress-item">
+              <div style={{ marginBottom: '4px', fontSize: '12px', fontWeight: 'bold', color: '#4a90e2' }}>
+                🎙️ Audio Generation
+              </div>
+              <div className="progress-bar-container">
+                <div 
+                  className="progress-bar-fill" 
+                  style={{ 
+                    width: `${audioProgress}%`, 
+                    background: 'linear-gradient(90deg, #4a90e2 0%, #357abd 100%)'
+                  }}
+                >
+                  <span className="progress-text">{Math.round(audioProgress)}%</span>
+                </div>
+              </div>
+              {audioProgressMessage && (
+                <p className="progress-message" style={{ fontSize: '11px', marginTop: '2px', marginBottom: '8px' }}>
+                  {audioProgressMessage}
+                </p>
+              )}
             </div>
+          )}
+          
+          {/* Video Progress Bar */}
+          <div className="progress-item">
+            <div style={{ marginBottom: '4px', fontSize: '12px', fontWeight: 'bold', color: '#e74c3c' }}>
+              🎬 Video Generation
+            </div>
+            <div className="progress-bar-container">
+              <div 
+                className="progress-bar-fill" 
+                style={{ 
+                  width: `${videoProgress}%`, 
+                  background: 'linear-gradient(90deg, #e74c3c 0%, #c0392b 100%)'
+                }}
+              >
+                <span className="progress-text">{Math.round(videoProgress)}%</span>
+              </div>
+            </div>
+            {videoProgressMessage && (
+              <p className="progress-message" style={{ fontSize: '11px', marginTop: '2px', marginBottom: '8px' }}>
+                {videoProgressMessage}
+              </p>
+            )}
           </div>
-          {progressMessage && <p className="progress-message">{progressMessage}</p>}
-          <div className="progress-timing">
+          
+          {/* Overall Timing */}
+          <div className="progress-timing" style={{ marginTop: '8px' }}>
             <span>Elapsed: {formatClock(scrollingElapsedSec)}</span>
             {scrollingEtaSec != null && progress > 0 && progress < 100 ? (
               <span>ETA: {formatClock(scrollingEtaSec)}</span>
@@ -830,6 +912,7 @@ export default function AdvancedTab() {
               <span />
             )}
           </div>
+          
           <div className="cancel-button-container">
             <button onClick={handleCancel} className="cancel-button">
               ❌ Cancel
