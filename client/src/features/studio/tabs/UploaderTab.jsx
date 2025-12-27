@@ -57,8 +57,8 @@ export default function UploaderTab() {
       <div className="section-content">
         {/* Authentication Section */}
         <div
-          className="form-group"
-          style={{ marginBottom: '20px', padding: '15px', backgroundColor: '#f5f5f5', borderRadius: '8px' }}
+          className="form-group uploader-block"
+          style={{ marginBottom: '20px', padding: '15px', borderRadius: '8px' }}
         >
           <div
             style={{
@@ -71,6 +71,7 @@ export default function UploaderTab() {
           >
             <h3 style={{ marginTop: 0, marginBottom: 0 }}>🔐 Authentication</h3>
             <div
+              className="uploader-status-text"
               style={{
                 fontSize: '13px',
                 color: selectedYoutubeProfileId && youtubeAuthenticated ? 'green' : '#666',
@@ -172,7 +173,7 @@ export default function UploaderTab() {
           </div>
 
           {showAuthCodeInput && (
-            <div style={{ padding: '15px', backgroundColor: 'white', borderRadius: '5px', marginTop: '10px' }}>
+            <div className="uploader-form-block" style={{ padding: '15px', borderRadius: '5px', marginTop: '10px' }}>
               <div
                 style={{
                   fontSize: '12px',
@@ -231,7 +232,7 @@ export default function UploaderTab() {
           )}
 
           {showCredentialsForm && (
-            <div style={{ padding: '15px', backgroundColor: 'white', borderRadius: '5px', marginTop: '10px' }}>
+            <div className="uploader-form-block" style={{ padding: '15px', borderRadius: '5px', marginTop: '10px' }}>
               <div
                 style={{
                   fontSize: '12px',
@@ -343,8 +344,8 @@ export default function UploaderTab() {
 
         {/* Batch Upload */}
         <div
-          className="form-group"
-          style={{ marginBottom: '20px', padding: '15px', backgroundColor: '#f5f5f5', borderRadius: '8px' }}
+          className="form-group uploader-block"
+          style={{ marginBottom: '20px', padding: '15px', borderRadius: '8px' }}
         >
           <h3 style={{ marginTop: 0 }}>🧾 Batch Upload (multiple videos at the same time)</h3>
           <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '10px' }}>
@@ -375,7 +376,7 @@ export default function UploaderTab() {
 
           {youtubeBatchItems.length > 0 ? (
             <>
-              <div style={{ backgroundColor: 'white', borderRadius: '6px', padding: '10px', maxHeight: '220px', overflow: 'auto' }}>
+              <div className="uploader-form-block" style={{ borderRadius: '6px', padding: '10px', maxHeight: '220px', overflow: 'auto' }}>
                 {youtubeBatchItems.map((item) => (
                   <div key={item.id} style={{ borderBottom: '1px solid #eee', padding: '8px 0' }}>
                     <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
@@ -432,7 +433,7 @@ export default function UploaderTab() {
 
               {/* Dedicated editor UI appears below the entire list */}
               {editingBatchItemId && (
-                <div style={{ marginTop: '12px', padding: '12px', backgroundColor: 'white', borderRadius: '6px', border: '1px solid #eee' }}>
+                <div className="uploader-form-block" style={{ marginTop: '12px', padding: '12px', borderRadius: '6px', border: '1px solid #eee' }}>
                   <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: '10px' }}>
                     <div>
                       <div style={{ fontWeight: 600 }}>✏️ Edit batch video details</div>
@@ -504,8 +505,8 @@ export default function UploaderTab() {
 
                   {/* Scheduling (per video) */}
                   <div
-                    className="form-group"
-                    style={{ marginTop: '10px', padding: '12px', backgroundColor: '#f5f5f5', borderRadius: '8px' }}
+                    className="form-group uploader-block"
+                    style={{ marginTop: '10px', padding: '12px', borderRadius: '8px' }}
                   >
                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: editingBatchForm.scheduleEnabled ? '10px' : 0 }}>
                       <input

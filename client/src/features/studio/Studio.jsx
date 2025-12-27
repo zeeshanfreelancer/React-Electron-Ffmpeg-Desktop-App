@@ -111,6 +111,13 @@ function ScrollingTextVideo() {
   const [youtubeStatus, setYoutubeStatus] = useState('');
   const [activeMainTab, setActiveMainTab] = useState('advanced');
   const [activeSettingsTab, setActiveSettingsTab] = useState('batch');
+  
+  // Theme state
+  const [theme, setTheme] = useState(() => {
+    // Load theme from localStorage or default to 'light'
+    const savedTheme = localStorage.getItem('slideshow-generator-theme');
+    return savedTheme || 'light';
+  });
 
   const resetScrollingTiming = () => {
     const now = Date.now();
@@ -1955,9 +1962,34 @@ function ScrollingTextVideo() {
     socialPresets,
   };
 
+  // Theme toggle handler
+  const toggleTheme = () => {
+    const newTheme = theme === 'light' ? 'dark' : 'light';
+    setTheme(newTheme);
+    localStorage.setItem('slideshow-generator-theme', newTheme);
+    // Apply theme class to root element
+    document.documentElement.setAttribute('data-theme', newTheme);
+  };
+
+  // Apply theme on mount and when theme changes
+  useEffect(() => {
+    document.documentElement.setAttribute('data-theme', theme);
+  }, [theme]);
+
   return (
     <StudioContext.Provider value={{ state: studioState, actions: studioActions, constants: studioConstants }}>
-      <div className="scrolling-video-container">
+      <div className={`scrolling-video-container theme-${theme}`}>
+        {/* Theme Toggle Button */}
+        <div style={{ position: 'fixed', top: '10px', right: '10px', zIndex: 1000 }}>
+          <button
+            onClick={toggleTheme}
+            className="theme-toggle-btn"
+            title={theme === 'light' ? 'Switch to Dark Mode' : 'Switch to Light Mode'}
+          >
+            {theme === 'light' ? '🌙' : '☀️'}
+          </button>
+        </div>
+
         {/* Top-level Tab Navigation */}
         <div className="main-tab-navigation">
           <button

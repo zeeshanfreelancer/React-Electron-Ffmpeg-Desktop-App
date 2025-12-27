@@ -1,6 +1,13 @@
 /* App.css */
 /* hello world */
 
+html, body {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  box-sizing: border-box;
+}
+
 body {
   margin: 0;
   padding: 0;
@@ -10,10 +17,21 @@ body {
   min-height: 100vh;
   box-sizing: border-box;
   overflow-x: hidden;
+  transition: background 0.3s ease;
+}
+
+body[data-theme="dark"] {
+  background: #0f172a;
+  color: #f3f4f6;
+}
+
+body[data-theme="light"] {
+  background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+  color: #2c3e50;
 }
 
 .app {
-  background-color: #ffffff;
+  background-color: transparent;
   border-radius: 0;
   box-shadow: none;
   max-width: 100%;
@@ -21,6 +39,11 @@ body {
   padding: 0;
   overflow-x: hidden;
   min-height: 100vh;
+  transition: background-color 0.3s ease;
+}
+
+body[data-theme="dark"] .app {
+  background-color: transparent;
 }
 
 @media (max-width: 768px) {

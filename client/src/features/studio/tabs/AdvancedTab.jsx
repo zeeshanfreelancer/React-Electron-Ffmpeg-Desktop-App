@@ -182,7 +182,7 @@ export default function AdvancedTab() {
           onClick={() => setActiveSettingsTab('quality')}
           disabled={isGenerating}
         >
-          🎬 Video Quality & Export
+          🎬 Export Video
         </button>
       </div>
 
@@ -241,7 +241,7 @@ export default function AdvancedTab() {
           </div>
 
           {/* Project Management */}
-          <div className="form-group" style={{ marginTop: '24px', borderTop: '1px solid #ddd', paddingTop: '16px' }}>
+          <div className="form-group batch-section-divider" style={{ marginTop: '24px', paddingTop: '16px' }}>
             <label>Project Management</label>
             <div className="button-group-full">
               <button onClick={handleSaveBatchProject} disabled={isGenerating} className="small-btn">
@@ -255,7 +255,7 @@ export default function AdvancedTab() {
 
           {/* Batch Settings */}
           {batchVideos.length > 0 && (
-            <div className="form-group" style={{ marginTop: '24px', borderTop: '1px solid #ddd', paddingTop: '16px' }}>
+            <div className="form-group batch-section-divider" style={{ marginTop: '24px', paddingTop: '16px' }}>
               <label>Batch Settings</label>
               <div className="button-group-full" style={{ marginBottom: '8px' }}>
                 <button
@@ -283,28 +283,27 @@ export default function AdvancedTab() {
 
           {/* Per-Video Controls */}
           {batchVideos.length > 0 && (
-            <div className="form-group" style={{ marginTop: '24px', borderTop: '1px solid #ddd', paddingTop: '16px' }}>
+            <div className="form-group batch-section-divider" style={{ marginTop: '24px', paddingTop: '16px' }}>
               <label>Videos ({batchVideos.length})</label>
-              <div style={{ maxHeight: '400px', overflowY: 'auto', border: '1px solid #ddd', borderRadius: '4px', padding: '8px' }}>
+              <div className="batch-videos-list-container" style={{ maxHeight: '400px', overflowY: 'auto', borderRadius: '4px', padding: '8px' }}>
                 {batchVideos.map((video, index) => (
                   <div
                     key={video.id || index}
+                    className={`batch-video-item ${editingBatchVideoIndex === index ? 'batch-video-item-editing' : ''}`}
                     style={{
                       display: 'flex',
                       justifyContent: 'space-between',
                       alignItems: 'center',
                       padding: '12px',
                       marginBottom: '8px',
-                      backgroundColor: editingBatchVideoIndex === index ? '#e3f2fd' : '#f9f9f9',
                       borderRadius: '4px',
-                      border: editingBatchVideoIndex === index ? '2px solid #2196f3' : '1px solid #ddd',
                     }}
                   >
                     <div style={{ flex: 1 }}>
-                      <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>
+                      <div className="batch-video-title" style={{ fontWeight: 'bold', marginBottom: '4px' }}>
                         {video.name || `Video ${index + 1}`}
                       </div>
-                      <div style={{ fontSize: '12px', color: '#666' }}>
+                      <div className="batch-video-description" style={{ fontSize: '12px' }}>
                         {video.text ? `Text: ${video.text.substring(0, 50)}${video.text.length > 50 ? '...' : ''}` : 'No text'}
                         {video.imagePath && ' | Has image'}
                         {video.videoPath && ' | Has video'}
@@ -730,10 +729,11 @@ export default function AdvancedTab() {
                 type="range"
                 min="0"
                 max="1"
-                step="0.1"
+                step="0.01"
                 value={overlayOpacity}
                 onChange={(e) => setOverlayOpacity(parseFloat(e.target.value))}
                 disabled={isGenerating}
+                style={{ ['--range-progress']: `${(overlayOpacity / 1) * 100}%` }}
               />
               <span>{Math.round(overlayOpacity * 100)}%</span>
             </div>
@@ -743,7 +743,7 @@ export default function AdvancedTab() {
                 type="range"
                 min="0"
                 max="2"
-                step="0.1"
+                step="0.01"
                 value={colorAdjustments.brightness}
                 onChange={(e) =>
                   setColorAdjustments((prev) => ({
@@ -752,7 +752,9 @@ export default function AdvancedTab() {
                   }))
                 }
                 disabled={isGenerating}
+                style={{ ['--range-progress']: `${(colorAdjustments.brightness / 2) * 100}%` }}
               />
+              <span>{Math.round(colorAdjustments.brightness * 100)}%</span>
             </div>
           </div>
 
@@ -764,7 +766,7 @@ export default function AdvancedTab() {
                 type="range"
                 min="0"
                 max="2"
-                step="0.1"
+                step="0.01"
                 value={colorAdjustments.contrast}
                 onChange={(e) =>
                   setColorAdjustments((prev) => ({
@@ -773,7 +775,9 @@ export default function AdvancedTab() {
                   }))
                 }
                 disabled={isGenerating}
+                style={{ ['--range-progress']: `${(colorAdjustments.contrast / 2) * 100}%` }}
               />
+              <span>{Math.round(colorAdjustments.contrast * 100)}%</span>
             </div>
             <div className="form-group">
               <label>Saturation</label>
@@ -781,7 +785,7 @@ export default function AdvancedTab() {
                 type="range"
                 min="0"
                 max="2"
-                step="0.1"
+                step="0.01"
                 value={colorAdjustments.saturation}
                 onChange={(e) =>
                   setColorAdjustments((prev) => ({
@@ -790,7 +794,9 @@ export default function AdvancedTab() {
                   }))
                 }
                 disabled={isGenerating}
+                style={{ ['--range-progress']: `${(colorAdjustments.saturation / 2) * 100}%` }}
               />
+              <span>{Math.round(colorAdjustments.saturation * 100)}%</span>
             </div>
           </div>
         </div>
@@ -1054,11 +1060,11 @@ export default function AdvancedTab() {
           <div className="form-group">
             <label>Additional Exports</label>
             <div className="form-row-three exports-checkboxes">
-              <label className="checkbox-label">
+              <label className="checkbox-label" style={{ marginBottom: 0 }}>
                 <input type="checkbox" checked={exportGif} onChange={(e) => setExportGif(e.target.checked)} disabled={isGenerating} />
                 Export as GIF
               </label>
-              <label className="checkbox-label">
+              <label className="checkbox-label" style={{ marginBottom: 0 }}>
                 <input
                   type="checkbox"
                   checked={exportImageSequence}
@@ -1067,7 +1073,7 @@ export default function AdvancedTab() {
                 />
                 Export Image Sequence
               </label>
-              <label className="checkbox-label">
+              <label className="checkbox-label" style={{ marginBottom: 0 }}>
                 <input
                   type="checkbox"
                   checked={exportThumbnail}
@@ -1092,7 +1098,7 @@ export default function AdvancedTab() {
           {/* Audio Progress Bar (only show if narration is enabled) */}
           {audioText && audioText.trim().length > 0 && (
             <div className="progress-item">
-              <div style={{ marginBottom: '4px', fontSize: '12px', fontWeight: 'bold', color: '#4a90e2' }}>
+              <div className="progress-label" style={{ marginBottom: '4px', fontSize: '12px', fontWeight: 'bold', color: '#4a90e2' }}>
                 🎙️ Audio Generation
               </div>
               <div className="progress-bar-container">
@@ -1116,7 +1122,7 @@ export default function AdvancedTab() {
           
           {/* Video Progress Bar */}
           <div className="progress-item">
-            <div style={{ marginBottom: '4px', fontSize: '12px', fontWeight: 'bold', color: '#e74c3c' }}>
+            <div className="progress-label" style={{ marginBottom: '4px', fontSize: '12px', fontWeight: 'bold', color: '#e74c3c' }}>
               🎬 Video Generation
             </div>
             <div className="progress-bar-container">
