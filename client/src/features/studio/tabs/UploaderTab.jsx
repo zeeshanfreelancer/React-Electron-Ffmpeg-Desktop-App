@@ -40,6 +40,7 @@ export default function UploaderTab() {
     handleSelectYoutubeVideosBatch,
     handleBatchUploadAllParallel,
     handleBatchClear,
+    handleApplyFirstVideoSettingsToAll,
     openBatchItemEditor,
     closeBatchItemEditor,
     saveBatchItemEditor,
@@ -355,6 +356,14 @@ export default function UploaderTab() {
               disabled={isAnyBatchYoutubeUploading || !selectedYoutubeProfileId}
             >
               📁 Select Multiple Videos
+            </button>
+            <button
+              onClick={handleApplyFirstVideoSettingsToAll}
+              className="small-btn"
+              style={{ backgroundColor: '#17a2b8' }}
+              disabled={youtubeBatchItems.length < 2 || isAnyBatchYoutubeUploading}
+            >
+              📋 Apply First Video Settings to All
             </button>
             <button
               onClick={handleBatchUploadAllParallel}

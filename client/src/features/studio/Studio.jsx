@@ -778,6 +778,45 @@ function ScrollingTextVideo() {
     setYoutubeStatus('🧹 Batch queue cleared');
   };
 
+  const handleApplyFirstVideoSettingsToAll = () => {
+    if (youtubeBatchItems.length === 0) {
+      setYoutubeStatus('ℹ️ No videos in the batch queue');
+      return;
+    }
+
+    const firstVideo = youtubeBatchItems[0];
+    if (!firstVideo) {
+      setYoutubeStatus('❌ No first video found');
+      return;
+    }
+
+    // Extract settings from first video (excluding path, id, status, progress, message, result, error)
+    const settingsToApply = {
+      title: firstVideo.title || '',
+      description: firstVideo.description || '',
+      tags: firstVideo.tags || '',
+      privacyStatus: firstVideo.privacyStatus || YT_DEFAULT_PRIVACY,
+      categoryId: firstVideo.categoryId || YT_DEFAULT_CATEGORY_ID,
+      scheduleEnabled: Boolean(firstVideo.scheduleEnabled),
+      publishAtLocal: firstVideo.publishAtLocal || '',
+    };
+
+    // Apply settings to all videos (keeping their original path, id, status, etc.)
+    const videosToUpdate = youtubeBatchItems.length - 1;
+    setYoutubeBatchItems((prev) =>
+      prev.map((item, index) => {
+        // Skip the first video (index 0) as it already has these settings
+        if (index === 0) return item;
+        return {
+          ...item,
+          ...settingsToApply,
+        };
+      })
+    );
+
+    setYoutubeStatus(`✅ Applied first video settings to ${videosToUpdate} video(s)`);
+  };
+
   const openBatchItemEditor = (item) => {
     if (!item) return;
     setEditingBatchItemId(item.id);
@@ -1945,6 +1984,7 @@ function ScrollingTextVideo() {
     handleYoutubeDeleteProfile,
     handleBatchUploadAllParallel,
     handleBatchClear,
+    handleApplyFirstVideoSettingsToAll,
     openBatchItemEditor,
     closeBatchItemEditor,
     saveBatchItemEditor,
