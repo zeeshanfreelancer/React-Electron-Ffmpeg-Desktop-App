@@ -80,6 +80,12 @@ function ScrollingTextVideo() {
   // Social media presets
   const [socialPreset, setSocialPreset] = useState('custom');
 
+  // Batch videos state
+  const [batchVideos, setBatchVideos] = useState([]); // Array of video configurations
+  const [batchVideoMode, setBatchVideoMode] = useState('single'); // 'single' or 'multiple'
+  const [batchVideoCount, setBatchVideoCount] = useState(1);
+  const [editingBatchVideoIndex, setEditingBatchVideoIndex] = useState(null); // Index of video being edited
+
   // UI state
   const [isGenerating, setIsGenerating] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -104,7 +110,7 @@ function ScrollingTextVideo() {
   const [effectStatus, setEffectStatus] = useState('');
   const [youtubeStatus, setYoutubeStatus] = useState('');
   const [activeMainTab, setActiveMainTab] = useState('advanced');
-  const [activeSettingsTab, setActiveSettingsTab] = useState('basic');
+  const [activeSettingsTab, setActiveSettingsTab] = useState('batch');
 
   const resetScrollingTiming = () => {
     const now = Date.now();
@@ -996,6 +1002,11 @@ function ScrollingTextVideo() {
     }
   };
 
+  const handleRemoveAudio = () => {
+    setBackgroundMusic({ enabled: false, path: '', volume: 0.5, fadeIn: 0, fadeOut: 0 });
+    setScrollingStatus('');
+  };
+
   const handleSelectSubtitle = async () => {
     const path = await window.electronAPI.selectSubtitle();
     if (path) {
@@ -1380,6 +1391,231 @@ function ScrollingTextVideo() {
     setScrollingStatus('⚠️ Video generation cancelled');
   };
 
+  // Clear all form fields
+  const clearAllFields = () => {
+    setImagePath('');
+    setImagePaths([]);
+    setVideoPath('');
+    setText('');
+    setTexts([{ text: '', x: null, y: null }]);
+    setAudioText('');
+    setAudioLanguage('en');
+    setAudioProvider('xtts');
+    setSelectedTtsVoiceName('');
+    setSelectedXttsVoiceId('');
+    setWidth(1920);
+    setHeight(1080);
+    setScrollSpeed(100);
+    setScrollDirection('vertical');
+    setTextColor('#ffffff');
+    setFontSize(48);
+    setFontFamily('Arial');
+    setFps(30);
+    setTextEffects({
+      bold: false,
+      italic: false,
+      underline: false,
+      outline: { enabled: false, color: '#000000', width: 2 },
+      shadow: { enabled: false, color: 'rgba(0, 0, 0, 0.5)', blur: 10, offsetX: 0, offsetY: 2 },
+      gradient: { enabled: false, colors: ['#ffffff', '#000000'] },
+    });
+    setTextAnimation({ type: 'none' });
+    setBackgroundGradient({ enabled: false, colors: ['#000000', '#ffffff'] });
+    setOverlayOpacity(0.3);
+    setImageFilter('none');
+    setColorAdjustments({ brightness: 1, contrast: 1, saturation: 1, hue: 0 });
+    setBackgroundCrop({ enabled: false, x: 0, y: 0, width: null, height: null });
+    setBackgroundRotation(0);
+    setBackgroundMusic({ enabled: false, path: '', volume: 0.5, fadeIn: 0, fadeOut: 0 });
+    setSlides([]);
+    setUseMultiSlide(false);
+    setExportFormat('mp4');
+    setQualityPreset('high');
+    setBitrate('');
+    setOutputDirectory('');
+    setExportGif(false);
+    setExportImageSequence(false);
+    setExportThumbnail(false);
+    setSubtitles({ enabled: false, items: [], filePath: '' });
+    setSocialPreset('custom');
+  };
+
+  // Batch video handlers
+  const handleCreateBatchVideos = () => {
+    const count = batchVideoMode === 'single' ? 1 : parseInt(batchVideoCount) || 1;
+    if (count < 1) {
+      setScrollingStatus('❌ Number of videos must be at least 1');
+      return;
+    }
+    
+    const baseConfig = buildConfig();
+    const newVideos = Array.from({ length: count }, (_, index) => ({
+      ...baseConfig,
+      id: Date.now() + index, // Unique ID
+      name: `Video ${index + 1}`,
+    }));
+    
+    setBatchVideos(newVideos);
+    setScrollingStatus(`✅ Created ${count} video${count > 1 ? 's' : ''}`);
+  };
+
+  const handleEditBatchVideo = (index) => {
+    const video = batchVideos[index];
+    if (!video) return;
+    
+    // Load the video config into the current settings
+    loadConfig(video);
+    setEditingBatchVideoIndex(index);
+    
+    // Switch to Basic Settings tab
+    setActiveSettingsTab('basic');
+    setScrollingStatus(`📝 Editing Video ${index + 1}`);
+  };
+
+  const handleSaveBatchVideo = () => {
+    if (editingBatchVideoIndex === null || editingBatchVideoIndex < 0 || editingBatchVideoIndex >= batchVideos.length) {
+      setScrollingStatus('❌ No video selected for editing');
+      return;
+    }
+    
+    const savedIndex = editingBatchVideoIndex;
+    const currentConfig = buildConfig();
+    const updatedVideos = [...batchVideos];
+    updatedVideos[savedIndex] = {
+      ...updatedVideos[savedIndex],
+      ...currentConfig,
+    };
+    
+    setBatchVideos(updatedVideos);
+    setEditingBatchVideoIndex(null);
+    setActiveSettingsTab('batch');
+    setScrollingStatus(`✅ Saved Video ${savedIndex + 1}`);
+    
+    // Clear all form fields
+    clearAllFields();
+  };
+
+  const handleBackToBatchVideos = () => {
+    setEditingBatchVideoIndex(null);
+    setActiveSettingsTab('batch');
+    clearAllFields();
+  };
+
+  const handleApplySettingsToAll = () => {
+    if (batchVideos.length === 0) {
+      setScrollingStatus('❌ No videos to apply settings to');
+      return;
+    }
+    
+    const currentConfig = buildConfig();
+    const updatedVideos = batchVideos.map(video => ({
+      ...video,
+      ...currentConfig,
+    }));
+    
+    setBatchVideos(updatedVideos);
+    setScrollingStatus(`✅ Applied settings to all ${batchVideos.length} videos`);
+  };
+
+  const handleRemoveSettingsFromAll = () => {
+    if (batchVideos.length === 0) {
+      setScrollingStatus('❌ No videos to remove settings from');
+      return;
+    }
+    
+    // Create an empty/default config structure
+    const emptyConfig = {
+      imagePath: '',
+      imagePaths: null,
+      videoPath: null,
+      text: '',
+      texts: null,
+      width: 1920,
+      height: 1080,
+      scrollSpeed: 100,
+      scrollDirection: 'vertical',
+      textColor: '#ffffff',
+      fontSize: 48,
+      fontFamily: 'Arial',
+      fps: 30,
+      textEffects: {
+        bold: false,
+        italic: false,
+        underline: false,
+        outline: { enabled: false, color: '#000000', width: 2 },
+        shadow: { enabled: false, color: 'rgba(0, 0, 0, 0.5)', blur: 10, offsetX: 0, offsetY: 2 },
+        gradient: { enabled: false, colors: ['#ffffff', '#000000'] },
+      },
+      textAnimation: { type: 'none' },
+      backgroundGradient: { enabled: false, colors: ['#000000', '#ffffff'] },
+      overlayOpacity: 0.3,
+      imageFilter: 'none',
+      colorAdjustments: { brightness: 1, contrast: 1, saturation: 1, hue: 0 },
+      backgroundCrop: { enabled: false, x: 0, y: 0, width: null, height: null },
+      backgroundRotation: 0,
+      backgroundMusic: { enabled: false, path: '', volume: 0.5, fadeIn: 0, fadeOut: 0 },
+      slides: null,
+      exportFormat: 'mp4',
+      qualityPreset: 'high',
+      bitrate: null,
+      outputDirectory: null,
+      exportGif: false,
+      exportImageSequence: false,
+      exportThumbnail: false,
+      subtitles: { enabled: false, items: [], filePath: '' },
+      narration: {
+        enabled: false,
+        text: '',
+        language: 'en',
+        provider: 'xtts',
+        voiceName: null,
+      },
+    };
+    
+    // Apply empty config to all videos, preserving id and name
+    const updatedVideos = batchVideos.map(video => ({
+      id: video.id,
+      name: video.name,
+      ...emptyConfig,
+    }));
+    
+    setBatchVideos(updatedVideos);
+    setScrollingStatus(`✅ Removed settings from all ${batchVideos.length} videos`);
+  };
+
+  const handleSaveBatchProject = async () => {
+    try {
+      const batchProject = {
+        batchVideos,
+        batchVideoMode,
+        batchVideoCount,
+        savedAt: new Date().toISOString(),
+      };
+      const path = await window.electronAPI.saveProject(batchProject);
+      setScrollingStatus(`✅ Batch project saved: ${path}`);
+    } catch (error) {
+      setScrollingStatus(`❌ Failed to save batch project: ${error.message}`);
+    }
+  };
+
+  const handleLoadBatchProject = async () => {
+    try {
+      const config = await window.electronAPI.loadProject();
+      if (config.batchVideos) {
+        setBatchVideos(config.batchVideos);
+        if (config.batchVideoMode) setBatchVideoMode(config.batchVideoMode);
+        if (config.batchVideoCount) setBatchVideoCount(config.batchVideoCount);
+        setScrollingStatus(`✅ Batch project loaded successfully`);
+      } else {
+        // Regular project, load as single video config
+        loadConfig(config);
+        setScrollingStatus(`✅ Project loaded (single video mode)`);
+      }
+    } catch (error) {
+      setScrollingStatus(`❌ Failed to load batch project: ${error.message}`);
+    }
+  };
+
   const fontFamilies = [
     'Arial', 'Helvetica', 'Times New Roman', 'Georgia', 'Courier New',
     'Verdana', 'Trebuchet MS', 'Comic Sans MS', 'Impact', 'Palatino',
@@ -1513,6 +1749,12 @@ function ScrollingTextVideo() {
     scrollingEtaSec,
     scrollingStatus,
 
+    // Batch videos
+    batchVideos,
+    batchVideoMode,
+    batchVideoCount,
+    editingBatchVideoIndex,
+
     // Pan/Zoom
     panZoomImageFolder,
     panZoomOutputFolder,
@@ -1613,11 +1855,28 @@ function ScrollingTextVideo() {
     handleSelectMultipleImages,
     handleSelectVideo,
     handleSelectAudio,
+    handleRemoveAudio,
     handleSelectSubtitle,
     handleSelectOutputDirectory,
     handleSocialPreset,
     handleGenerate,
     handleCancel,
+
+    // Batch video setters
+    setBatchVideos,
+    setBatchVideoMode,
+    setBatchVideoCount,
+    setEditingBatchVideoIndex,
+
+    // Batch video handlers
+    handleCreateBatchVideos,
+    handleEditBatchVideo,
+    handleSaveBatchVideo,
+    handleBackToBatchVideos,
+    handleApplySettingsToAll,
+    handleRemoveSettingsFromAll,
+    handleSaveBatchProject,
+    handleLoadBatchProject,
 
     // Pan/Zoom setters + handlers
     setPanZoomVideoWidth,

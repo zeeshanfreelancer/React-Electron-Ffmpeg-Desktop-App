@@ -53,6 +53,10 @@ export default function AdvancedTab() {
     scrollingElapsedSec,
     scrollingEtaSec,
     scrollingStatus,
+    batchVideos,
+    batchVideoMode,
+    batchVideoCount,
+    editingBatchVideoIndex,
   } = state;
 
   const {
@@ -93,9 +97,22 @@ export default function AdvancedTab() {
     handleSelectVideo,
     handleSocialPreset,
     handleSelectAudio,
+    handleRemoveAudio,
     handleSelectOutputDirectory,
     handleGenerate,
     handleCancel,
+    setBatchVideos,
+    setBatchVideoMode,
+    setBatchVideoCount,
+    setEditingBatchVideoIndex,
+    handleCreateBatchVideos,
+    handleEditBatchVideo,
+    handleSaveBatchVideo,
+    handleBackToBatchVideos,
+    handleApplySettingsToAll,
+    handleRemoveSettingsFromAll,
+    handleSaveBatchProject,
+    handleLoadBatchProject,
   } = actions;
 
   const {
@@ -125,6 +142,13 @@ export default function AdvancedTab() {
     <div className="form-section">
       {/* Tab Navigation */}
       <div className="tab-navigation">
+        <button
+          className={`tab-button ${activeSettingsTab === 'batch' ? 'active' : ''}`}
+          onClick={() => setActiveSettingsTab('batch')}
+          disabled={isGenerating}
+        >
+          📦 Batch Videos
+        </button>
         <button
           className={`tab-button ${activeSettingsTab === 'basic' ? 'active' : ''}`}
           onClick={() => setActiveSettingsTab('basic')}
@@ -162,18 +186,215 @@ export default function AdvancedTab() {
         </button>
       </div>
 
+      {/* Batch Videos Tab */}
+      {activeSettingsTab === 'batch' && (
+        <div className="section-content">
+          {/* Video Creation Options */}
+          <div className="form-group">
+            <label>Video Creation Options</label>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '24px', flexWrap: 'wrap' }}>
+              <label className="radio-label" style={{ display: 'flex', alignItems: 'center', marginBottom: 0, gap: '8px', }}>
+                <input
+                  type="radio"
+                  name="batchMode"
+                  value="single"
+                  checked={batchVideoMode === 'single'}
+                  onChange={(e) => setBatchVideoMode(e.target.value)}
+                  disabled={isGenerating}
+                />
+                Single Video
+              </label>
+              <label className="radio-label" style={{ display: 'flex', alignItems: 'center', marginBottom: 0, gap: '8px' }}>
+                <input
+                  type="radio"
+                  name="batchMode"
+                  value="multiple"
+                  checked={batchVideoMode === 'multiple'}
+                  onChange={(e) => setBatchVideoMode(e.target.value)}
+                  disabled={isGenerating}
+                />
+                Multiple Videos
+              </label>
+              <button
+                onClick={handleCreateBatchVideos}
+                disabled={isGenerating}
+                className="small-btn"
+                style={{ marginLeft: '8px' }}
+              >
+                ➕ Create Videos
+              </button>
+            </div>
+            {batchVideoMode === 'multiple' && (
+              <div className="form-group" style={{ marginTop: '12px' }}>
+                <label>Number of Videos</label>
+                <input
+                  type="number"
+                  min="1"
+                  max="100"
+                  value={batchVideoCount}
+                  onChange={(e) => setBatchVideoCount(Math.max(1, parseInt(e.target.value) || 1))}
+                  disabled={isGenerating}
+                  className="form-control"
+                />
+              </div>
+            )}
+          </div>
+
+          {/* Project Management */}
+          <div className="form-group" style={{ marginTop: '24px', borderTop: '1px solid #ddd', paddingTop: '16px' }}>
+            <label>Project Management</label>
+            <div className="button-group-full">
+              <button onClick={handleSaveBatchProject} disabled={isGenerating} className="small-btn">
+                💾 Save Project
+              </button>
+              <button onClick={handleLoadBatchProject} disabled={isGenerating} className="small-btn">
+                📂 Load Project
+              </button>
+            </div>
+          </div>
+
+          {/* Batch Settings */}
+          {batchVideos.length > 0 && (
+            <div className="form-group" style={{ marginTop: '24px', borderTop: '1px solid #ddd', paddingTop: '16px' }}>
+              <label>Batch Settings</label>
+              <div className="button-group-full" style={{ marginBottom: '8px' }}>
+                <button
+                  onClick={handleApplySettingsToAll}
+                  disabled={isGenerating}
+                  className="small-btn"
+                  style={{ flex: 1 }}
+                >
+                  ⚙️ Apply Current Settings to All Videos
+                </button>
+                <button
+                  onClick={handleRemoveSettingsFromAll}
+                  disabled={isGenerating}
+                  className="small-btn"
+                  style={{ flex: 1, backgroundColor: '#f44336', color: 'white' }}
+                >
+                  🗑️ Remove Settings from All Videos
+                </button>
+              </div>
+              <p style={{ fontSize: '12px', color: '#666', marginTop: '8px' }}>
+                Apply current settings to all videos, or remove all settings to reset them to defaults.
+              </p>
+            </div>
+          )}
+
+          {/* Per-Video Controls */}
+          {batchVideos.length > 0 && (
+            <div className="form-group" style={{ marginTop: '24px', borderTop: '1px solid #ddd', paddingTop: '16px' }}>
+              <label>Videos ({batchVideos.length})</label>
+              <div style={{ maxHeight: '400px', overflowY: 'auto', border: '1px solid #ddd', borderRadius: '4px', padding: '8px' }}>
+                {batchVideos.map((video, index) => (
+                  <div
+                    key={video.id || index}
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      padding: '12px',
+                      marginBottom: '8px',
+                      backgroundColor: editingBatchVideoIndex === index ? '#e3f2fd' : '#f9f9f9',
+                      borderRadius: '4px',
+                      border: editingBatchVideoIndex === index ? '2px solid #2196f3' : '1px solid #ddd',
+                    }}
+                  >
+                    <div style={{ flex: 1 }}>
+                      <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>
+                        {video.name || `Video ${index + 1}`}
+                      </div>
+                      <div style={{ fontSize: '12px', color: '#666' }}>
+                        {video.text ? `Text: ${video.text.substring(0, 50)}${video.text.length > 50 ? '...' : ''}` : 'No text'}
+                        {video.imagePath && ' | Has image'}
+                        {video.videoPath && ' | Has video'}
+                      </div>
+                    </div>
+                    <div style={{ display: 'flex', gap: '8px' }}>
+                      <button
+                        onClick={() => handleEditBatchVideo(index)}
+                        disabled={isGenerating}
+                        className="small-btn"
+                        style={{ padding: '6px 12px' }}
+                      >
+                        ✏️ Edit
+                      </button>
+                      {editingBatchVideoIndex === index && (
+                        <button
+                          onClick={handleSaveBatchVideo}
+                          disabled={isGenerating}
+                          className="small-btn"
+                          style={{ padding: '6px 12px', backgroundColor: '#4caf50', color: 'white' }}
+                        >
+                          💾 Save
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+              {editingBatchVideoIndex !== null && (
+                <p style={{ fontSize: '12px', color: '#2196f3', marginTop: '12px', fontStyle: 'italic' }}>
+                  📝 Currently editing Video {editingBatchVideoIndex + 1}. Go to Basic Settings tab to configure.
+                </p>
+              )}
+            </div>
+          )}
+
+          {batchVideos.length === 0 && (
+            <div style={{ textAlign: 'center', padding: '40px', color: '#999' }}>
+              <p>No videos created yet. Select single or multiple mode above and click "Create Videos".</p>
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Basic Settings */}
       {activeSettingsTab === 'basic' && (
         <div className="section-content">
+          {/* Batch Video Editing Indicator */}
+          {editingBatchVideoIndex !== null && (
+            <div style={{
+              padding: '12px',
+              backgroundColor: '#e3f2fd',
+              border: '2px solid #2196f3',
+              borderRadius: '4px',
+              marginBottom: '16px',
+            }}>
+              <div style={{ fontWeight: 'bold', color: '#1976d2', marginBottom: '4px' }}>
+                📝 Editing Batch Video {editingBatchVideoIndex + 1}
+              </div>
+              <div style={{ fontSize: '12px', color: '#666' }}>
+                Configure settings below. Click "Save Batch Video" when done, or go back to Batch Videos tab.
+              </div>
+            </div>
+          )}
+
           {/* Action Buttons Row */}
           <div className="form-group">
             <div className="button-group-full">
-              <button onClick={handleSaveProject} disabled={isGenerating} className="small-btn">
-                💾 Save Project
-              </button>
-              <button onClick={handleLoadProject} disabled={isGenerating} className="small-btn">
-                📂 Load Project
-              </button>
+              {editingBatchVideoIndex !== null ? (
+                <>
+                  <button onClick={handleSaveBatchVideo} disabled={isGenerating} className="small-btn" style={{ backgroundColor: '#4caf50', color: 'white' }}>
+                    💾 Save Batch Video
+                  </button>
+                  <button onClick={handleBackToBatchVideos} disabled={isGenerating} className="small-btn">
+                    ← Back to Batch Videos
+                  </button>
+                  <button onClick={handleLoadProject} disabled={isGenerating} className="small-btn">
+                    📂 Load Project
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button onClick={handleSaveProject} disabled={isGenerating} className="small-btn">
+                    💾 Save Project
+                  </button>
+                  <button onClick={handleLoadProject} disabled={isGenerating} className="small-btn">
+                    📂 Load Project
+                  </button>
+                </>
+              )}
               <button onClick={handleSelectImage} disabled={isGenerating} className="small-btn">
                 📸 Single Image
               </button>
@@ -705,10 +926,23 @@ export default function AdvancedTab() {
             </div>
             <div className="form-group">
               <label>Background Music</label>
-              <button onClick={handleSelectAudio} disabled={isGenerating} className="audio-control-btn">
-                🎵 Select Audio File
-              </button>
-              {backgroundMusic.path && <p className="file-info">Selected: {backgroundMusic.path.split(/[/\\]/).pop()}</p>}
+              <div className="input-with-button">
+                <input
+                  type="text"
+                  value={backgroundMusic.path ? backgroundMusic.path.split(/[/\\]/).pop() : ''}
+                  placeholder="No audio file selected"
+                  readOnly
+                  style={{ flex: 1 }}
+                />
+                <button onClick={handleSelectAudio} disabled={isGenerating} className="small-btn">
+                  🎵 Select Audio File
+                </button>
+                {backgroundMusic.path && (
+                  <button onClick={handleRemoveAudio} disabled={isGenerating} className="small-btn" style={{ backgroundColor: '#f44336', color: 'white' }}>
+                    ❌ Remove
+                  </button>
+                )}
+              </div>
             </div>
           </div>
 
