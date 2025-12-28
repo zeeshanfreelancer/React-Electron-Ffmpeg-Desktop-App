@@ -39,6 +39,7 @@ export default function PanZoomTab() {
     handleSelectPanZoomOutputFolder,
     handlePanZoomSocialPreset,
     handleSelectPanZoomAudio,
+    handleRemovePanZoomAudio,
     handleGeneratePanZoomVideo,
     handleCancelPanZoomVideo,
   } = actions;
@@ -215,12 +216,23 @@ export default function PanZoomTab() {
         {/* Audio Settings */}
         <div className="form-group">
           <label>Background Music</label>
-          <button onClick={handleSelectPanZoomAudio} disabled={isPanZoomGenerating} className="audio-control-btn">
-            🎵 Select Audio File
-          </button>
-          {panZoomBackgroundMusic.path && (
-            <p className="file-info">Selected: {panZoomBackgroundMusic.path.split(/[/\\]/).pop()}</p>
-          )}
+          <div className="input-with-button">
+            <input
+              type="text"
+              value={panZoomBackgroundMusic.path ? panZoomBackgroundMusic.path.split(/[/\\]/).pop() : ''}
+              placeholder="No audio file selected"
+              readOnly
+              style={{ flex: 1 }}
+            />
+            <button onClick={handleSelectPanZoomAudio} disabled={isPanZoomGenerating} className="small-btn">
+              🎵 Select Audio File
+            </button>
+            {panZoomBackgroundMusic.path && (
+              <button onClick={handleRemovePanZoomAudio} disabled={isPanZoomGenerating} className="small-btn" style={{ backgroundColor: '#f44336', color: 'white' }}>
+                ❌ Remove
+              </button>
+            )}
+          </div>
         </div>
 
         {panZoomBackgroundMusic.enabled && panZoomBackgroundMusic.path && (
@@ -231,7 +243,7 @@ export default function PanZoomTab() {
                 type="range"
                 min="0"
                 max="1"
-                step="0.1"
+                step="0.01"
                 value={panZoomBackgroundMusic.volume}
                 onChange={(e) =>
                   setPanZoomBackgroundMusic((prev) => ({
@@ -240,6 +252,7 @@ export default function PanZoomTab() {
                   }))
                 }
                 disabled={isPanZoomGenerating}
+                style={{ ['--range-progress']: `${(panZoomBackgroundMusic.volume / 1) * 100}%` }}
               />
               <span>{Math.round(panZoomBackgroundMusic.volume * 100)}%</span>
             </div>
@@ -291,8 +304,8 @@ export default function PanZoomTab() {
         {isPanZoomGenerating && (
           <div className="progress-section">
             <div className="progress-bar-container">
-              <div className="progress-bar-fill" style={{ width: `${panZoomProgress}%` }}>
-                <span className="progress-text">{panZoomProgress}%</span>
+              <div className="progress-bar-fill" style={{ width: `${Math.round(panZoomProgress)}%` }}>
+                <span className="progress-text">{Math.round(panZoomProgress)}%</span>
               </div>
             </div>
             {panZoomProgressMessage && <p className="progress-message">{panZoomProgressMessage}</p>}

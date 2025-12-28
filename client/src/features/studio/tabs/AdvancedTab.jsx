@@ -960,7 +960,7 @@ export default function AdvancedTab() {
                   type="range"
                   min="0"
                   max="1"
-                  step="0.1"
+                  step="0.01"
                   value={backgroundMusic.volume}
                   onChange={(e) =>
                     setBackgroundMusic((prev) => ({
@@ -969,7 +969,9 @@ export default function AdvancedTab() {
                     }))
                   }
                   disabled={isGenerating}
+                  style={{ ['--range-progress']: `${(backgroundMusic.volume / 1) * 100}%` }}
                 />
+                <span>{Math.round(backgroundMusic.volume * 100)}%</span>
               </div>
               <div className="form-group">
                 <label>Fade In (seconds)</label>

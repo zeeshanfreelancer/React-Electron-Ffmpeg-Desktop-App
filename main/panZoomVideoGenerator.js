@@ -111,7 +111,9 @@ async function generatePanZoomVideo(options, progressCallback, shouldCancel) {
       resolvedTransition,
       backgroundMusic,
       progressCallback,
-      shouldCancel
+      shouldCancel,
+      totalVideos, // current video index
+      videosToCreate // total videos
     );
   }
 
@@ -139,7 +141,9 @@ async function createVideoFromImages(
   transition,
   backgroundMusic,
   progressCallback,
-  shouldCancel
+  shouldCancel,
+  videoIndex = null,
+  totalVideos = null
 ) {
   const tempDirPrefix = path.join(app.getPath('temp'), 'panzoom-video-');
   const tempDir = await fs.mkdtemp(tempDirPrefix);
@@ -325,10 +329,14 @@ async function createVideoFromImages(
         // Update progress periodically
         if (progressCallback && frameIndex % Math.ceil(fps) === 0) {
           const progress = (frameIndex / totalFramesToGenerate) * 80;
+          let message = `Processing image ${imgIndex + 1}/${imagePaths.length}, frame ${frame + 1}/${totalFrames}`;
+          if (videoIndex !== null && videoIndex !== undefined && totalVideos !== null && totalVideos !== undefined) {
+            message = `Video ${videoIndex}/${totalVideos} - ${message}`;
+          }
           progressCallback({
             type: 'frame',
             progress: progress,
-            message: `Processing image ${imgIndex + 1}/${imagePaths.length}, frame ${frame + 1}/${totalFrames}`,
+            message: message,
             current: frameIndex,
             total: totalFramesToGenerate,
           });
@@ -338,10 +346,14 @@ async function createVideoFromImages(
 
     // Encode video from JPEG frames (without audio first)
     if (progressCallback) {
+      let message = `Encoding video from ${frameIndex} frames...`;
+      if (videoIndex !== null && videoIndex !== undefined && totalVideos !== null && totalVideos !== undefined) {
+        message = `Video ${videoIndex}/${totalVideos} - ${message}`;
+      }
       progressCallback({
         type: 'encoding',
         progress: 85,
-        message: `Encoding video from ${frameIndex} frames...`,
+        message: message,
       });
     }
 
@@ -352,10 +364,14 @@ async function createVideoFromImages(
     let finalVideoPath = videoWithoutAudio;
     if (backgroundMusic && backgroundMusic.path) {
       if (progressCallback) {
+        let message = 'Mixing audio with video...';
+        if (videoIndex !== null && videoIndex !== undefined && totalVideos !== null && totalVideos !== undefined) {
+          message = `Video ${videoIndex}/${totalVideos} - ${message}`;
+        }
         progressCallback({
           type: 'audio-mix',
           progress: 95,
-          message: 'Mixing audio with video...',
+          message: message,
         });
       }
 
@@ -393,10 +409,14 @@ async function createVideoFromImages(
     await cleanupTempDir(tempDir);
 
     if (progressCallback) {
+      let message = `Video created: ${path.basename(outputPath)}`;
+      if (videoIndex !== null && videoIndex !== undefined && totalVideos !== null && totalVideos !== undefined) {
+        message = `Video ${videoIndex}/${totalVideos} - ${message}`;
+      }
       progressCallback({
         type: 'done',
         progress: 100,
-        message: `Video created: ${path.basename(outputPath)}`,
+        message: message,
       });
     }
   } catch (error) {

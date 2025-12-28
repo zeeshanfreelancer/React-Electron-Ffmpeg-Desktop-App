@@ -17,6 +17,8 @@ export default function UploaderTab() {
     editingBatchItemId,
     editingBatchForm,
     youtubeStatus,
+    isSavingBatchItem,
+    batchItemSaved,
   } = state;
 
   const {
@@ -41,6 +43,8 @@ export default function UploaderTab() {
     handleBatchUploadAllParallel,
     handleBatchClear,
     handleApplyFirstVideoSettingsToAll,
+    handleSaveYoutubeProject,
+    handleLoadYoutubeProject,
     openBatchItemEditor,
     closeBatchItemEditor,
     saveBatchItemEditor,
@@ -351,6 +355,22 @@ export default function UploaderTab() {
           <h3 style={{ marginTop: 0 }}>🧾 Batch Upload (multiple videos at the same time)</h3>
           <div style={{ display: 'flex', gap: '10px', flexWrap: 'wrap', marginBottom: '10px' }}>
             <button
+              onClick={handleSaveYoutubeProject}
+              className="small-btn"
+              disabled={isAnyBatchYoutubeUploading || youtubeBatchItems.length === 0}
+              style={{ backgroundColor: '#17a2b8' }}
+            >
+              💾 Save Project
+            </button>
+            <button
+              onClick={handleLoadYoutubeProject}
+              className="small-btn"
+              disabled={isAnyBatchYoutubeUploading}
+              style={{ backgroundColor: '#17a2b8' }}
+            >
+              📂 Load Project
+            </button>
+            <button
               onClick={handleSelectYoutubeVideosBatch}
               className="small-btn"
               disabled={isAnyBatchYoutubeUploading || !selectedYoutubeProfileId}
@@ -452,10 +472,30 @@ export default function UploaderTab() {
                       <button
                         onClick={saveBatchItemEditor}
                         className="small-btn"
-                        style={{ backgroundColor: '#007bff' }}
-                        disabled={!editingBatchItemId || isEditingBatchUploading}
+                        style={{ 
+                          backgroundColor: batchItemSaved ? '#28a745' : '#007bff',
+                          position: 'relative',
+                          paddingRight: isSavingBatchItem ? '35px' : '16px'
+                        }}
+                        disabled={!editingBatchItemId || isEditingBatchUploading || isSavingBatchItem}
                       >
-                        💾 Save
+                        {isSavingBatchItem ? '💾 Saving...' : batchItemSaved ? '✅ Saved' : '💾 Save'}
+                        {isSavingBatchItem && (
+                          <span 
+                            style={{ 
+                              position: 'absolute',
+                              right: '12px',
+                              top: '50%',
+                              transform: 'translateY(-50%)',
+                              width: '16px',
+                              height: '16px',
+                              border: '2px solid rgba(255,255,255,0.3)',
+                              borderTopColor: '#ffffff',
+                              borderRadius: '50%',
+                              animation: 'spin 0.8s linear infinite'
+                            }}
+                          />
+                        )}
                       </button>
                       <button onClick={closeBatchItemEditor} className="small-btn">
                         ✅ Done

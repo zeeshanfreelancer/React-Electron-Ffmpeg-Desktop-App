@@ -164,6 +164,8 @@ function ScrollingTextVideo() {
     scheduleEnabled: false,
     publishAtLocal: '',
   });
+  const [isSavingBatchItem, setIsSavingBatchItem] = useState(false);
+  const [batchItemSaved, setBatchItemSaved] = useState(false);
 
   // Avoid stale state inside long-lived IPC listeners
   const selectedYoutubeProfileIdRef = useRef('');
@@ -817,6 +819,62 @@ function ScrollingTextVideo() {
     setYoutubeStatus(`✅ Applied first video settings to ${videosToUpdate} video(s)`);
   };
 
+  const handleSaveYoutubeProject = async () => {
+    try {
+      // Save all video settings except runtime states (status, progress, message, result, error)
+      const projectData = {
+        youtubeBatchItems: youtubeBatchItems.map((item) => ({
+          id: item.id,
+          path: item.path,
+          title: item.title || '',
+          description: item.description || '',
+          tags: item.tags || '',
+          privacyStatus: item.privacyStatus || YT_DEFAULT_PRIVACY,
+          categoryId: item.categoryId || YT_DEFAULT_CATEGORY_ID,
+          scheduleEnabled: Boolean(item.scheduleEnabled),
+          publishAtLocal: item.publishAtLocal || '',
+        })),
+        savedAt: new Date().toISOString(),
+      };
+      const path = await window.electronAPI.saveProject(projectData);
+      if (path) {
+        setYoutubeStatus(`✅ Project saved: ${path} (${youtubeBatchItems.length} video(s))`);
+      }
+    } catch (error) {
+      setYoutubeStatus(`❌ Failed to save project: ${error.message}`);
+    }
+  };
+
+  const handleLoadYoutubeProject = async () => {
+    try {
+      const projectData = await window.electronAPI.loadProject();
+      if (!projectData) {
+        return; // User canceled
+      }
+
+      if (!projectData.youtubeBatchItems || !Array.isArray(projectData.youtubeBatchItems)) {
+        setYoutubeStatus('❌ Invalid project data');
+        return;
+      }
+
+      // Restore items with default runtime states
+      const restoredItems = projectData.youtubeBatchItems.map((item) => ({
+        ...item,
+        status: 'pending',
+        progress: 0,
+        message: '',
+        result: null,
+        error: null,
+      }));
+
+      setYoutubeBatchItems(restoredItems);
+      setEditingBatchItemId('');
+      setYoutubeStatus(`✅ Project loaded successfully (${restoredItems.length} video(s))`);
+    } catch (error) {
+      setYoutubeStatus(`❌ Failed to load project: ${error.message}`);
+    }
+  };
+
   const openBatchItemEditor = (item) => {
     if (!item) return;
     setEditingBatchItemId(item.id);
@@ -828,14 +886,22 @@ function ScrollingTextVideo() {
       scheduleEnabled: Boolean(item.scheduleEnabled),
       publishAtLocal: item.publishAtLocal || '',
     });
+    setIsSavingBatchItem(false);
+    setBatchItemSaved(false);
   };
 
   const closeBatchItemEditor = () => {
     setEditingBatchItemId('');
   };
 
-  const saveBatchItemEditor = () => {
+  const saveBatchItemEditor = async () => {
     if (!editingBatchItemId) return;
+    setIsSavingBatchItem(true);
+    setBatchItemSaved(false);
+    
+    // Simulate a brief save delay for better UX
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
     setYoutubeBatchItems((prev) =>
       prev.map((x) =>
         x.id === editingBatchItemId
@@ -851,7 +917,15 @@ function ScrollingTextVideo() {
           : x
       )
     );
+    
+    setIsSavingBatchItem(false);
+    setBatchItemSaved(true);
     setYoutubeStatus('✅ Batch item metadata updated');
+    
+    // Reset saved state after 2 seconds
+    setTimeout(() => {
+      setBatchItemSaved(false);
+    }, 2000);
   };
 
   const handleSaveYoutubeCredentials = async () => {
@@ -1101,6 +1175,11 @@ function ScrollingTextVideo() {
       setPanZoomBackgroundMusic(prev => ({ ...prev, path, enabled: true }));
       setPanZoomStatus('');
     }
+  };
+
+  const handleRemovePanZoomAudio = () => {
+    setPanZoomBackgroundMusic({ enabled: false, path: '', volume: 0.5, fadeIn: 0, fadeOut: 0 });
+    setPanZoomStatus('');
   };
 
   const handleSelectEffectImageFolder = async () => {
@@ -1851,6 +1930,8 @@ function ScrollingTextVideo() {
     editingBatchItemId,
     editingBatchForm,
     youtubeStatus,
+    isSavingBatchItem,
+    batchItemSaved,
   };
 
   const studioActions = {
@@ -1938,6 +2019,7 @@ function ScrollingTextVideo() {
     handleSelectPanZoomImageFolder,
     handleSelectPanZoomOutputFolder,
     handleSelectPanZoomAudio,
+    handleRemovePanZoomAudio,
     handleGeneratePanZoomVideo,
     handleCancelPanZoomVideo,
     handlePanZoomSocialPreset,
@@ -1985,10 +2067,14 @@ function ScrollingTextVideo() {
     handleBatchUploadAllParallel,
     handleBatchClear,
     handleApplyFirstVideoSettingsToAll,
+    handleSaveYoutubeProject,
+    handleLoadYoutubeProject,
     openBatchItemEditor,
     closeBatchItemEditor,
     saveBatchItemEditor,
     startBatchUploadItem,
+    isSavingBatchItem,
+    batchItemSaved,
   };
 
   const studioConstants = {
