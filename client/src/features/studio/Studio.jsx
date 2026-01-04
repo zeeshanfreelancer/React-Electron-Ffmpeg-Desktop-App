@@ -98,6 +98,11 @@ function ScrollingTextVideo() {
   // Separate progress for audio and video
   const [audioProgress, setAudioProgress] = useState(0);
   const [audioProgressMessage, setAudioProgressMessage] = useState('');
+  // Separate progress for frame rendering vs encoding
+  const [frameProgress, setFrameProgress] = useState(0);
+  const [frameProgressMessage, setFrameProgressMessage] = useState('');
+  const [encodingProgress, setEncodingProgress] = useState(0);
+  const [encodingProgressMessage, setEncodingProgressMessage] = useState('');
   const [videoProgress, setVideoProgress] = useState(0);
   const [videoProgressMessage, setVideoProgressMessage] = useState('');
   // Timing (Advanced generator): elapsed + ETA based on observed progress rate
@@ -321,17 +326,21 @@ function ScrollingTextVideo() {
 
       if (progressData.type === 'frame' || progressData.type === 'batch') {
         if (canUpdateProgress) {
+          setFrameProgress(progressData.progress);
           setVideoProgress(progressData.progress);
           // Also update main progress for backward compatibility
           setProgress(progressData.progress);
         }
-        setVideoProgressMessage(progressData.message || `Processing: ${progressData.current}/${progressData.total}`);
+        setFrameProgressMessage(progressData.message || `Rendering: ${progressData.current}/${progressData.total}`);
+        setVideoProgressMessage(progressData.message || `Rendering: ${progressData.current}/${progressData.total}`);
         setProgressMessage(progressData.message || `Processing: ${progressData.current}/${progressData.total}`);
       } else if (progressData.type === 'encoding') {
         if (canUpdateProgress) {
+          setEncodingProgress(progressData.progress);
           setVideoProgress(progressData.progress);
           setProgress(progressData.progress);
         }
+        setEncodingProgressMessage(progressData.message || 'Encoding video...');
         setVideoProgressMessage(progressData.message || 'Encoding video...');
         setProgressMessage(progressData.message || 'Encoding video...');
       } else if (progressData.type === 'audio') {
@@ -343,9 +352,11 @@ function ScrollingTextVideo() {
       } else if (progressData.type === 'audio-mix') {
         if (canUpdateProgress) {
           // Audio mixing is part of video finalization
+          setEncodingProgress(progressData.progress);
           setVideoProgress(progressData.progress);
           setProgress(progressData.progress);
         }
+        setEncodingProgressMessage(progressData.message || 'Mixing audio with video...');
         setVideoProgressMessage(progressData.message || 'Mixing audio with video...');
         setProgressMessage(progressData.message || 'Mixing audio with video...');
       } else if (progressData.message) {
@@ -404,6 +415,10 @@ function ScrollingTextVideo() {
       setProgressMessage('');
       setAudioProgress(100);
       setAudioProgressMessage('');
+      setFrameProgress(100);
+      setFrameProgressMessage('');
+      setEncodingProgress(100);
+      setEncodingProgressMessage('');
       setVideoProgress(100);
       setVideoProgressMessage('');
       setScrollingEtaSec(0);
@@ -416,6 +431,10 @@ function ScrollingTextVideo() {
       setProgressMessage('');
       setAudioProgress(0);
       setAudioProgressMessage('');
+      setFrameProgress(0);
+      setFrameProgressMessage('');
+      setEncodingProgress(0);
+      setEncodingProgressMessage('');
       setVideoProgress(0);
       setVideoProgressMessage('');
       setScrollingEtaSec(null);
@@ -428,6 +447,10 @@ function ScrollingTextVideo() {
       setProgressMessage('');
       setAudioProgress(0);
       setAudioProgressMessage('');
+      setFrameProgress(0);
+      setFrameProgressMessage('');
+      setEncodingProgress(0);
+      setEncodingProgressMessage('');
       setVideoProgress(0);
       setVideoProgressMessage('');
       setScrollingEtaSec(null);
@@ -1562,6 +1585,10 @@ function ScrollingTextVideo() {
     setProgressMessage('Initializing...');
     setAudioProgress(0);
     setAudioProgressMessage('');
+    setFrameProgress(0);
+    setFrameProgressMessage('');
+    setEncodingProgress(0);
+    setEncodingProgressMessage('');
     setVideoProgress(0);
     setVideoProgressMessage('');
     setScrollingStatus('🎬 Generating video...');
@@ -1937,6 +1964,10 @@ function ScrollingTextVideo() {
     progressMessage,
     audioProgress,
     audioProgressMessage,
+    frameProgress,
+    frameProgressMessage,
+    encodingProgress,
+    encodingProgressMessage,
     videoProgress,
     videoProgressMessage,
     scrollingElapsedSec,

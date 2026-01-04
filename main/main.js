@@ -30,6 +30,9 @@ let oauthCallbackServer = null;
 let youtubeAuthWebContents = null;
 let youtubeAuthProfileId = null;
 
+// Active worker for streaming scrolling generator (one at a time)
+let scrollingWorkerProc = null;
+
 // App settings (persisted in Electron userData)
 function getSettingsPath() {
   return path.join(app.getPath('userData'), 'settings.json');
@@ -51,6 +54,50 @@ async function writeAppSettings(nextSettings) {
     nextSettings && typeof nextSettings === 'object' ? nextSettings : {};
   await fs.mkdir(path.dirname(settingsPath), { recursive: true });
   await fs.writeFile(settingsPath, JSON.stringify(safe, null, 2), 'utf-8');
+}
+
+async function resolveVideoTempRoot() {
+  // User override
+  const settings = await readAppSettings();
+  const userDir = settings && typeof settings.tempDirectory === 'string' ? settings.tempDirectory.trim() : '';
+  if (userDir) {
+    const p = path.join(userDir, 'slideshow-generator-temp');
+    await fs.mkdir(p, { recursive: true });
+    return p;
+  }
+  // Default: dev => project root/video-temp, packaged => userData/video-temp
+  const baseRoot = app.isPackaged ? app.getPath('userData') : path.join(__dirname, '..');
+  const p = path.join(baseRoot, 'video-temp');
+  await fs.mkdir(p, { recursive: true });
+  return p;
+}
+
+async function cleanupVideoTempRoot({ maxAgeMs = 5 * 60 * 1000 } = {}) {
+  // Delete stale temp dirs (e.g., after cancel/crash). Safe: only deletes our known prefixes.
+  try {
+    const root = await resolveVideoTempRoot();
+    const now = Date.now();
+    const entries = await fs.readdir(root, { withFileTypes: true });
+    const candidates = entries
+      .filter((d) => d && d.isDirectory && d.isDirectory())
+      .map((d) => d.name)
+      .filter((name) => name.startsWith('scrolling-video-') || name.startsWith('panzoom-video-'))
+      .map((name) => path.join(root, name));
+
+    for (const dir of candidates) {
+      try {
+        const st = await fs.stat(dir);
+        const age = now - new Date(st.mtimeMs).getTime();
+        if (Number.isFinite(age) && age >= maxAgeMs) {
+          await fs.rm(dir, { recursive: true, force: true });
+        }
+      } catch (_) {
+        // ignore
+      }
+    }
+  } catch (_) {
+    // ignore
+  }
 }
 
 // Helper: Parse subtitle file (SRT or VTT)
@@ -480,29 +527,142 @@ function registerIpcHandlers() {
     currentVideoGeneration.webContents = event.sender;
 
     try {
-      const progressCallback = (progress) => {
-        if (currentVideoGeneration.cancelled) {
-          throw new Error('Video generation cancelled');
+      // Kill any previous worker (safety)
+      if (scrollingWorkerProc) {
+        try {
+          scrollingWorkerProc.kill();
+        } catch (_) {}
+        scrollingWorkerProc = null;
+      }
+
+      const workerPath = path.join(__dirname, 'workers', 'scrollingWorker.js');
+      const proc = childProcess.fork(workerPath, [], {
+        stdio: ['ignore', 'pipe', 'pipe', 'ipc'],
+        windowsHide: true,
+      });
+      scrollingWorkerProc = proc;
+
+      const sendProgress = (progress) => {
+        if (currentVideoGeneration.cancelled) return;
+        try {
+          event.sender.send('scrolling-video-progress', progress);
+        } catch (_) {
+          // ignore if sender is gone
         }
-        event.sender.send('scrolling-video-progress', progress);
       };
 
-      const shouldCancel = () => currentVideoGeneration.cancelled;
+      const safeWorkerSend = (payload) => {
+        try {
+          if (proc && proc.connected) {
+            proc.send(payload);
+            return true;
+          }
+        } catch (_) {
+          // ignore channel closed
+        }
+        return false;
+      };
 
-      const outputPath = await generateScrollingVideo(options, progressCallback, shouldCancel);
-      if (!currentVideoGeneration.cancelled) {
-        event.sender.send('scrolling-video-done', outputPath);
-      }
+      proc.on('message', async (msg) => {
+        if (!msg || typeof msg !== 'object') return;
+        if (currentVideoGeneration.cancelled) return;
+
+        if (msg.type === 'progress' && msg.payload) {
+          sendProgress(msg.payload);
+          return;
+        }
+
+        if (msg.type === 'xtts-synthesize' && msg.requestId && msg.payload) {
+          const requestId = msg.requestId;
+          const payload = msg.payload || {};
+          try {
+            await xttsManager.synthesizeWav({
+              text: String(payload.text || ''),
+              language: String(payload.language || 'en'),
+              voiceId: String(payload.voiceId || ''),
+              outPath: String(payload.outPath || ''),
+              progressCallback: (p) => sendProgress(p),
+            });
+            safeWorkerSend({ type: 'xtts-result', requestId, ok: true });
+          } catch (e) {
+            safeWorkerSend({ type: 'xtts-result', requestId, ok: false, error: e.message || String(e) });
+          }
+          return;
+        }
+
+        if (msg.type === 'done' && msg.outputPath) {
+          if (!currentVideoGeneration.cancelled) {
+            try {
+              event.sender.send('scrolling-video-done', msg.outputPath);
+            } catch (_) {
+              // ignore if sender is gone
+            }
+          }
+          try {
+            proc.kill();
+          } catch (_) {}
+          if (scrollingWorkerProc === proc) scrollingWorkerProc = null;
+          // Reset state when generation ends
+          currentVideoGeneration.cancelled = false;
+          currentVideoGeneration.webContents = null;
+          return;
+        }
+
+        if (msg.type === 'error') {
+          if (!currentVideoGeneration.cancelled) {
+            try {
+              event.sender.send('scrolling-video-error', msg.error || 'Unknown error');
+            } catch (_) {
+              // ignore if sender is gone
+            }
+          } else {
+            try {
+              event.sender.send('scrolling-video-cancelled');
+            } catch (_) {
+              // ignore
+            }
+          }
+          try {
+            proc.kill();
+          } catch (_) {}
+          if (scrollingWorkerProc === proc) scrollingWorkerProc = null;
+          // Reset state when generation ends
+          currentVideoGeneration.cancelled = false;
+          currentVideoGeneration.webContents = null;
+        }
+      });
+
+      proc.on('exit', () => {
+        if (scrollingWorkerProc === proc) scrollingWorkerProc = null;
+      });
+
+      proc.on('error', (err) => {
+        if (!currentVideoGeneration.cancelled) {
+          try {
+            event.sender.send('scrolling-video-error', err.message || String(err));
+          } catch (_) {
+            // ignore
+          }
+        }
+        if (scrollingWorkerProc === proc) scrollingWorkerProc = null;
+        currentVideoGeneration.cancelled = false;
+        currentVideoGeneration.webContents = null;
+      });
+
+      const tempRoot = await resolveVideoTempRoot();
+      const defaultOutputDir = app.getPath('desktop');
+
+      safeWorkerSend({
+        type: 'start',
+        options,
+        paths: { tempRoot, defaultOutputDir },
+      });
     } catch (error) {
       if (!currentVideoGeneration.cancelled) {
         event.sender.send('scrolling-video-error', error.message);
       } else {
         event.sender.send('scrolling-video-cancelled');
       }
-    } finally {
-      // Reset state
-      currentVideoGeneration.cancelled = false;
-      currentVideoGeneration.webContents = null;
     }
   });
 
@@ -511,6 +671,28 @@ function registerIpcHandlers() {
     currentVideoGeneration.cancelled = true;
     if (currentVideoGeneration.webContents) {
       currentVideoGeneration.webContents.send('scrolling-video-cancelled');
+    }
+    if (scrollingWorkerProc) {
+      try {
+        scrollingWorkerProc.send({ type: 'cancel' });
+      } catch (_) {}
+      // Also sweep stale temp dirs after a short delay (in case the worker is killed or Windows locks files briefly).
+      setTimeout(() => {
+        cleanupVideoTempRoot({ maxAgeMs: 30 * 1000 }).catch(() => {});
+      }, 3000);
+      // Hard kill fallback after a short grace period
+      setTimeout(() => {
+        if (scrollingWorkerProc) {
+          try {
+            scrollingWorkerProc.kill('SIGKILL');
+          } catch (_) {}
+          scrollingWorkerProc = null;
+          // One more sweep a bit later (locks may release after process exit).
+          setTimeout(() => {
+            cleanupVideoTempRoot({ maxAgeMs: 30 * 1000 }).catch(() => {});
+          }, 3000);
+        }
+      }, 15000);
     }
   });
 

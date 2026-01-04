@@ -51,8 +51,10 @@ export default function AdvancedTab() {
     progressMessage,
     audioProgress,
     audioProgressMessage,
-    videoProgress,
-    videoProgressMessage,
+    frameProgress,
+    frameProgressMessage,
+    encodingProgress,
+    encodingProgressMessage,
     scrollingElapsedSec,
     scrollingEtaSec,
     scrollingStatus,
@@ -1339,25 +1341,48 @@ export default function AdvancedTab() {
             </div>
           )}
           
-          {/* Video Progress Bar */}
+          {/* Frame Rendering Progress Bar */}
           <div className="progress-item">
-            <div className="progress-label" style={{ marginBottom: '4px', fontSize: '12px', fontWeight: 'bold', color: '#e74c3c' }}>
-              🎬 Video Generation
+            <div className="progress-label" style={{ marginBottom: '4px', fontSize: '12px', fontWeight: 'bold', color: '#e67e22' }}>
+              🧩 Frame Rendering
             </div>
             <div className="progress-bar-container">
               <div 
                 className="progress-bar-fill" 
                 style={{ 
-                  width: `${videoProgress}%`, 
+                  width: `${frameProgress}%`, 
+                  background: 'linear-gradient(90deg, #e67e22 0%, #d35400 100%)'
+                }}
+              >
+                <span className="progress-text">{Math.round(frameProgress)}%</span>
+              </div>
+            </div>
+            {frameProgressMessage && (
+              <p className="progress-message" style={{ fontSize: '11px', marginTop: '2px', marginBottom: '8px' }}>
+                {frameProgressMessage}
+              </p>
+            )}
+          </div>
+
+          {/* Encoding Progress Bar */}
+          <div className="progress-item">
+            <div className="progress-label" style={{ marginBottom: '4px', fontSize: '12px', fontWeight: 'bold', color: '#e74c3c' }}>
+              🎬 Video Encoding
+            </div>
+            <div className="progress-bar-container">
+              <div 
+                className="progress-bar-fill" 
+                style={{ 
+                  width: `${encodingProgress}%`, 
                   background: 'linear-gradient(90deg, #e74c3c 0%, #c0392b 100%)'
                 }}
               >
-                <span className="progress-text">{Math.round(videoProgress)}%</span>
+                <span className="progress-text">{Math.round(encodingProgress)}%</span>
               </div>
             </div>
-            {videoProgressMessage && (
+            {encodingProgressMessage && (
               <p className="progress-message" style={{ fontSize: '11px', marginTop: '2px', marginBottom: '8px' }}>
-                {videoProgressMessage}
+                {encodingProgressMessage}
               </p>
             )}
           </div>
