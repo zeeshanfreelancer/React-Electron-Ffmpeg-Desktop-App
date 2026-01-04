@@ -2,11 +2,15 @@
   "name": "slideshow-generator",
   "version": "1.0.0",
   "main": "main/main.js",
+  "author": "Your Name",
+  "description": "Professional slideshow and video generator with AI voice synthesis",
   "scripts": {
     "start": "concurrently \"npm run dev --prefix client\" \"wait-on http://localhost:5173 && cross-env ELECTRON_START_URL=http://localhost:5173 electron .\"",
     "build": "npm run build --prefix client && electron-builder"
   },
   "build": {
+    "appId": "com.slideshowgenerator.app",
+    "productName": "Slideshow Generator",
     "directories": {
       "output": "dist",
       "buildResources": "build"
@@ -17,18 +21,33 @@
       "main/**",
       "client/dist/**",
       "package.json",
-      "!**/dist{,/**}",
-      "!**/dist-*/**",
-      "!**/dist-final/**",
+      "node_modules/**",
+      "!dist/**",
+      "!dist-*/**",
+      "!dist-final/**",
       "!**/xtts/server/**",
       "!**/xtts/bin/**",
       "!**/xtts/models/**",
       "!**/xtts/voices/**",
-      "!**/*.log"
+      "!**/*.log",
+      "!node_modules/.cache/**",
+      "!node_modules/**/*.{md,ts,map}",
+      "!node_modules/**/*.d.ts",
+      "!node_modules/**/test/**",
+      "!node_modules/**/tests/**",
+      "!node_modules/**/*.test.js",
+      "!node_modules/**/*.spec.js"
     ],
     "win": {
       "target": [
-        "portable"
+        {
+          "target": "nsis",
+          "arch": ["x64"]
+        },
+        {
+          "target": "zip",
+          "arch": ["x64"]
+        }
       ],
       "signAndEditExecutable": false
     },

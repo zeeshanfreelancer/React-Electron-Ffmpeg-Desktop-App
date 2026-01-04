@@ -435,6 +435,7 @@ async function synthesizeWav({ text, language = 'en', voiceId = '', outPath, pro
   };
   
   for (let attempt = 0; attempt < maxRetries; attempt++) {
+    let simulatedProgressInterval = null;
     try {
       // If this is a retry after failure, force restart the server
       if (attempt > 0) {
@@ -468,9 +469,20 @@ async function synthesizeWav({ text, language = 'en', voiceId = '', outPath, pro
       // Model loading (first time) takes most of the time
       reportProgress(40, 'Generating audio (this may take 1-2 minutes on first run)...');
       
-      // Track download progress if possible (estimate based on text length)
-      const textLength = text.length;
-      const estimatedCharsPerPercent = Math.max(1, Math.ceil(textLength / 55)); // Rough estimate: 40-50% for generation, 50-95% for streaming
+      // Smooth progress UX:
+      // XTTS often streams audio with chunked transfer encoding (no Content-Length),
+      // so we can't compute a reliable percent from bytes. To avoid the UI looking "stuck",
+      // simulate a gentle progress ramp from 40% -> 94% while we wait for the response.
+      const safeTextLen = (text && typeof text === 'string') ? text.length : 0;
+      const startMs = Date.now();
+      // Heuristic: ~35ms per char, clamped (covers short and long texts).
+      const estimatedMs = Math.min(240000, Math.max(15000, safeTextLen * 35));
+      simulatedProgressInterval = setInterval(() => {
+        const elapsed = Date.now() - startMs;
+        const t = Math.max(0, Math.min(1, elapsed / estimatedMs));
+        const p = 40 + t * 54; // 40..94
+        reportProgress(Math.min(94, Math.round(p)), 'Generating audio...');
+      }, 500);
       
       const resp = await httpRequest({
         method: 'POST',
@@ -479,7 +491,7 @@ async function synthesizeWav({ text, language = 'en', voiceId = '', outPath, pro
         body,
         timeoutMs: 180000, // 3 minutes - model initialization can take a while
         onProgress: (bytesReceived, totalBytes) => {
-          // Estimate progress: 40% (model load) + 60% (audio generation/download)
+          // If server provides total bytes, use it for more accurate progress.
           if (totalBytes > 0) {
             const downloadProgress = (bytesReceived / totalBytes) * 60; // 60% of total is download
             const totalProgress = 40 + downloadProgress;
@@ -487,6 +499,11 @@ async function synthesizeWav({ text, language = 'en', voiceId = '', outPath, pro
           }
         },
       });
+
+      if (simulatedProgressInterval) {
+        clearInterval(simulatedProgressInterval);
+        simulatedProgressInterval = null;
+      }
       
       if (resp.status < 200 || resp.status >= 300) {
         let detail = '';
@@ -513,6 +530,10 @@ async function synthesizeWav({ text, language = 'en', voiceId = '', outPath, pro
       reportProgress(100, 'Audio generation complete');
       return outPath;
     } catch (err) {
+      if (simulatedProgressInterval) {
+        clearInterval(simulatedProgressInterval);
+        simulatedProgressInterval = null;
+      }
       // If it's a timeout and we haven't retried yet, restart and retry
       if ((err.message && err.message.includes('timeout')) || (err.message && err.message.includes('Request timeout'))) {
         if (attempt < maxRetries - 1) {

@@ -389,6 +389,12 @@
   gap: 10px;
 }
 
+.form-row-six {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr 1fr 1fr 1fr;
+  gap: 10px;
+}
+
 .form-row-three {
   display: grid;
   grid-template-columns: 1fr 1fr 1fr;
@@ -1166,6 +1172,10 @@ input[type="range"]::-moz-range-thumb:hover {
   }
 
   .form-row-five {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .form-row-six {
     grid-template-columns: 1fr 1fr;
   }
 

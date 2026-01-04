@@ -37,10 +37,13 @@ export default function AdvancedTab() {
     xttsVoicesLoading,
     selectedXttsVoiceId,
     backgroundMusic,
+    backgroundVoice,
     exportFormat,
     qualityPreset,
     bitrate,
     outputDirectory,
+    tempDirectory,
+    tempDirectoryStatus,
     exportGif,
     exportImageSequence,
     exportThumbnail,
@@ -83,6 +86,7 @@ export default function AdvancedTab() {
     setSelectedTtsVoiceName,
     setSelectedXttsVoiceId,
     setBackgroundMusic,
+    setBackgroundVoice,
     setExportFormat,
     setQualityPreset,
     setBitrate,
@@ -98,7 +102,11 @@ export default function AdvancedTab() {
     handleSocialPreset,
     handleSelectAudio,
     handleRemoveAudio,
+    handleSelectBackgroundVoice,
+    handleRemoveBackgroundVoice,
     handleSelectOutputDirectory,
+    handleSelectTempDirectory,
+    handleResetTempDirectory,
     handleGenerate,
     handleCancel,
     setBatchVideos,
@@ -409,18 +417,6 @@ export default function AdvancedTab() {
             {videoPath && <p className="file-info">Video: {videoPath.split(/[/\\]/).pop()}</p>}
           </div>
 
-          {/* Social Media Presets */}
-          <div className="form-group">
-            <label>Social Media Preset</label>
-            <select value={socialPreset} onChange={(e) => handleSocialPreset(e.target.value)} disabled={isGenerating}>
-              {socialPresets.map((preset) => (
-                <option key={preset.value} value={preset.value}>
-                  {preset.label}
-                </option>
-              ))}
-            </select>
-          </div>
-
           {/* Text Input */}
           <div className="form-group">
             <label>Scrolling Text</label>
@@ -434,7 +430,17 @@ export default function AdvancedTab() {
           </div>
 
           {/* Video Settings - All in One Row */}
-          <div className="form-row-five">
+          <div className="form-row-six">
+            <div className="form-group">
+              <label>Social Media Preset</label>
+              <select value={socialPreset} onChange={(e) => handleSocialPreset(e.target.value)} disabled={isGenerating}>
+                {socialPresets.map((preset) => (
+                  <option key={preset.value} value={preset.value}>
+                    {preset.label}
+                  </option>
+                ))}
+              </select>
+            </div>
             <div className="form-group">
               <label>Width (px)</label>
               <input
@@ -829,131 +835,315 @@ export default function AdvancedTab() {
             </small>
           </div>
 
-          {/* Voice Language / Voice selection + Background Music */}
-          <div className="form-row audio-controls-row">
-            <div className="form-group">
-              {audioProvider === 'xtts' ? (
-                <>
-                  <label>XTTS Voice</label>
-                  <div style={{ position: 'relative' }}>
-                    <select
-                      value={selectedXttsVoiceId}
-                      onChange={(e) => setSelectedXttsVoiceId(e.target.value)}
-                      disabled={isGenerating || xttsVoicesLoading || !xttsVoices || xttsVoices.length === 0}
-                      className="audio-control-select"
-                      style={{
-                        opacity: xttsVoicesLoading ? 0.6 : 1,
-                        backgroundImage: xttsVoicesLoading 
-                          ? 'none' 
-                          : undefined,
-                      }}
-                    >
-                      {xttsVoicesLoading ? (
-                        <option value="">Loading voices...</option>
-                      ) : xttsVoices && xttsVoices.length > 0 ? (
-                        xttsVoices.map((v) => (
-                          <option key={v.id} value={v.id}>
-                            {v.label || v.id}
-                          </option>
-                        ))
-                      ) : (
-                        <option value="">No XTTS voices found</option>
-                      )}
-                    </select>
-                    {xttsVoicesLoading && (
-                      <div
-                        style={{
-                          position: 'absolute',
-                          right: '30px',
-                          top: '50%',
-                          transform: 'translateY(-50%)',
-                          pointerEvents: 'none',
-                          width: '16px',
-                          height: '16px',
-                        }}
-                      >
-                        <div
-                          style={{
-                            width: '16px',
-                            height: '16px',
-                            border: '2px solid #f3f3f3',
-                            borderTop: '2px solid #4a90e2',
-                            borderRadius: '50%',
-                            animation: 'spin 1s linear infinite',
-                          }}
-                        />
-                      </div>
-                    )}
-                  </div>
-                  {xttsVoicesError ? (
-                    <small style={{ color: '#b00020', fontSize: '11px', marginTop: '4px', display: 'block' }}>
-                      XTTS error: {xttsVoicesError}
-                    </small>
-                  ) : null}
-                </>
-              ) : audioProvider === 'system' ? (
-                <>
-                  <label>Voice</label>
+          {/* Voice selection + audio tracks */}
+          {audioProvider === 'xtts' ? (
+            <>
+              {/* XTTS Voice on its own line */}
+              <div className="form-group">
+                <label>XTTS Voice</label>
+                <div style={{ position: 'relative' }}>
                   <select
-                    value={selectedTtsVoiceName}
-                    onChange={(e) => setSelectedTtsVoiceName(e.target.value)}
-                    disabled={isGenerating || !ttsVoices || ttsVoices.length === 0}
+                    value={selectedXttsVoiceId}
+                    onChange={(e) => setSelectedXttsVoiceId(e.target.value)}
+                    disabled={isGenerating || xttsVoicesLoading || !xttsVoices || xttsVoices.length === 0}
                     className="audio-control-select"
+                    style={{
+                      opacity: xttsVoicesLoading ? 0.6 : 1,
+                      backgroundImage: xttsVoicesLoading ? 'none' : undefined,
+                    }}
                   >
-                    {ttsVoices && ttsVoices.length > 0 ? (
-                      ttsVoices.map((v) => (
-                        <option key={v.name} value={v.name}>
-                          {v.name}
-                          {v.culture ? ` (${v.culture})` : ''}
+                    {xttsVoicesLoading ? (
+                      <option value="">Loading voices...</option>
+                    ) : xttsVoices && xttsVoices.length > 0 ? (
+                      xttsVoices.map((v) => (
+                        <option key={v.id} value={v.id}>
+                          {v.label || v.id}
                         </option>
                       ))
                     ) : (
-                      <option value="">No system voices found</option>
+                      <option value="">No XTTS voices found</option>
                     )}
                   </select>
-                </>
-              ) : (
-                <>
-                  <label>Voice Language</label>
-                  <select
-                    value={audioLanguage}
-                    onChange={(e) => setAudioLanguage(e.target.value)}
-                    disabled={isGenerating}
-                    className="audio-control-select"
-                  >
-                    {narrationLanguages.map((lang) => (
-                      <option key={lang.value} value={lang.value}>
-                        {lang.label}
+                  {xttsVoicesLoading && (
+                    <div
+                      style={{
+                        position: 'absolute',
+                        right: '30px',
+                        top: '50%',
+                        transform: 'translateY(-50%)',
+                        pointerEvents: 'none',
+                        width: '16px',
+                        height: '16px',
+                      }}
+                    >
+                      <div
+                        style={{
+                          width: '16px',
+                          height: '16px',
+                          border: '2px solid #f3f3f3',
+                          borderTop: '2px solid #4a90e2',
+                          borderRadius: '50%',
+                          animation: 'spin 1s linear infinite',
+                        }}
+                      />
+                    </div>
+                  )}
+                </div>
+                {xttsVoicesError ? (
+                  <small style={{ color: '#b00020', fontSize: '11px', marginTop: '4px', display: 'block' }}>
+                    XTTS error: {xttsVoicesError}
+                  </small>
+                ) : null}
+              </div>
+
+              {/* Background Voice + Music || Audio on the next line */}
+              <div className="form-row audio-controls-row">
+                <div className="form-group">
+                  <label>Background Voice</label>
+                  <div className="input-with-button">
+                    <input
+                      type="text"
+                      value={backgroundVoice && backgroundVoice.path ? backgroundVoice.path.split(/[/\\]/).pop() : ''}
+                      placeholder="No audio file selected"
+                      readOnly
+                      style={{ flex: 1 }}
+                    />
+                    <button onClick={handleSelectBackgroundVoice} disabled={isGenerating} className="small-btn">
+                      🎙️ Select Audio
+                    </button>
+                    {backgroundVoice && backgroundVoice.path && (
+                      <button
+                        onClick={handleRemoveBackgroundVoice}
+                        disabled={isGenerating}
+                        className="small-btn"
+                        style={{ backgroundColor: '#f44336', color: 'white' }}
+                      >
+                        ❌ Remove
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="form-group">
+                  <label>Music || Audio</label>
+                  <div className="input-with-button">
+                    <input
+                      type="text"
+                      value={backgroundMusic.path ? backgroundMusic.path.split(/[/\\]/).pop() : ''}
+                      placeholder="No audio file selected"
+                      readOnly
+                      style={{ flex: 1 }}
+                    />
+                    <button onClick={handleSelectAudio} disabled={isGenerating} className="small-btn">
+                      🎵 Select Audio File
+                    </button>
+                    {backgroundMusic.path && (
+                      <button
+                        onClick={handleRemoveAudio}
+                        disabled={isGenerating}
+                        className="small-btn"
+                        style={{ backgroundColor: '#f44336', color: 'white' }}
+                      >
+                        ❌ Remove
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </>
+          ) : audioProvider === 'system' ? (
+            <>
+              {/* System voice on its own line */}
+              <div className="form-group">
+                <label>Voice</label>
+                <select
+                  value={selectedTtsVoiceName}
+                  onChange={(e) => setSelectedTtsVoiceName(e.target.value)}
+                  disabled={isGenerating || !ttsVoices || ttsVoices.length === 0}
+                  className="audio-control-select"
+                >
+                  {ttsVoices && ttsVoices.length > 0 ? (
+                    ttsVoices.map((v) => (
+                      <option key={v.name} value={v.name}>
+                        {v.name}
+                        {v.culture ? ` (${v.culture})` : ''}
                       </option>
-                    ))}
-                  </select>
-                </>
-              )}
-            </div>
-            <div className="form-group">
-              <label>Background Music</label>
-              <div className="input-with-button">
-                <input
-                  type="text"
-                  value={backgroundMusic.path ? backgroundMusic.path.split(/[/\\]/).pop() : ''}
-                  placeholder="No audio file selected"
-                  readOnly
-                  style={{ flex: 1 }}
-                />
-                <button onClick={handleSelectAudio} disabled={isGenerating} className="small-btn">
-                  🎵 Select Audio File
-                </button>
-                {backgroundMusic.path && (
-                  <button onClick={handleRemoveAudio} disabled={isGenerating} className="small-btn" style={{ backgroundColor: '#f44336', color: 'white' }}>
-                    ❌ Remove
+                    ))
+                  ) : (
+                    <option value="">No system voices found</option>
+                  )}
+                </select>
+              </div>
+
+              {/* Background Voice + Music || Audio on the next line */}
+              <div className="form-row audio-controls-row">
+                <div className="form-group">
+                  <label>Background Voice</label>
+                  <div className="input-with-button">
+                    <input
+                      type="text"
+                      value={backgroundVoice && backgroundVoice.path ? backgroundVoice.path.split(/[/\\]/).pop() : ''}
+                      placeholder="No audio file selected"
+                      readOnly
+                      style={{ flex: 1 }}
+                    />
+                    <button onClick={handleSelectBackgroundVoice} disabled={isGenerating} className="small-btn">
+                      🎙️ Select Audio
+                    </button>
+                    {backgroundVoice && backgroundVoice.path && (
+                      <button
+                        onClick={handleRemoveBackgroundVoice}
+                        disabled={isGenerating}
+                        className="small-btn"
+                        style={{ backgroundColor: '#f44336', color: 'white' }}
+                      >
+                        ❌ Remove
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="form-group">
+                  <label>Music || Audio</label>
+                  <div className="input-with-button">
+                    <input
+                      type="text"
+                      value={backgroundMusic.path ? backgroundMusic.path.split(/[/\\]/).pop() : ''}
+                      placeholder="No audio file selected"
+                      readOnly
+                      style={{ flex: 1 }}
+                    />
+                    <button onClick={handleSelectAudio} disabled={isGenerating} className="small-btn">
+                      🎵 Select Audio File
+                    </button>
+                    {backgroundMusic.path && (
+                      <button
+                        onClick={handleRemoveAudio}
+                        disabled={isGenerating}
+                        className="small-btn"
+                        style={{ backgroundColor: '#f44336', color: 'white' }}
+                      >
+                        ❌ Remove
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            </>
+          ) : (
+            <div className="form-row audio-controls-row">
+              <div className="form-group">
+                <label>Background Voice</label>
+                <div className="input-with-button">
+                  <input
+                    type="text"
+                    value={backgroundVoice && backgroundVoice.path ? backgroundVoice.path.split(/[/\\]/).pop() : ''}
+                    placeholder="No audio file selected"
+                    readOnly
+                    style={{ flex: 1 }}
+                  />
+                  <button onClick={handleSelectBackgroundVoice} disabled={isGenerating} className="small-btn">
+                    🎙️ Select Audio
                   </button>
-                )}
+                  {backgroundVoice && backgroundVoice.path && (
+                    <button
+                      onClick={handleRemoveBackgroundVoice}
+                      disabled={isGenerating}
+                      className="small-btn"
+                      style={{ backgroundColor: '#f44336', color: 'white' }}
+                    >
+                      ❌ Remove
+                    </button>
+                  )}
+                </div>
+              </div>
+              <div className="form-group">
+                <label>Music || Audio</label>
+                <div className="input-with-button">
+                  <input
+                    type="text"
+                    value={backgroundMusic.path ? backgroundMusic.path.split(/[/\\]/).pop() : ''}
+                    placeholder="No audio file selected"
+                    readOnly
+                    style={{ flex: 1 }}
+                  />
+                  <button onClick={handleSelectAudio} disabled={isGenerating} className="small-btn">
+                    🎵 Select Audio File
+                  </button>
+                  {backgroundMusic.path && (
+                    <button
+                      onClick={handleRemoveAudio}
+                      disabled={isGenerating}
+                      className="small-btn"
+                      style={{ backgroundColor: '#f44336', color: 'white' }}
+                    >
+                      ❌ Remove
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
-          </div>
+          )}
+
+          {/* Background Voice controls */}
+          {backgroundVoice && backgroundVoice.enabled && backgroundVoice.path && (
+            <div className="form-row-three" style={{ marginTop: '8px' }}>
+              <div className="form-group">
+                <label>Background Voice Volume (0-1)</label>
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.01"
+                  value={backgroundVoice.volume}
+                  onChange={(e) =>
+                    setBackgroundVoice((prev) => ({
+                      ...prev,
+                      volume: parseFloat(e.target.value),
+                    }))
+                  }
+                  disabled={isGenerating}
+                  style={{ ['--range-progress']: `${(backgroundVoice.volume / 1) * 100}%` }}
+                />
+                <span>{Math.round(backgroundVoice.volume * 100)}%</span>
+              </div>
+              <div className="form-group">
+                <label>Background Voice Fade In (seconds)</label>
+                <input
+                  type="number"
+                  value={backgroundVoice.fadeIn}
+                  onChange={(e) =>
+                    setBackgroundVoice((prev) => ({
+                      ...prev,
+                      fadeIn: parseFloat(e.target.value),
+                    }))
+                  }
+                  min="0"
+                  step="0.5"
+                  disabled={isGenerating}
+                />
+              </div>
+              <div className="form-group">
+                <label>Background Voice Fade Out (seconds)</label>
+                <input
+                  type="number"
+                  value={backgroundVoice.fadeOut}
+                  onChange={(e) =>
+                    setBackgroundVoice((prev) => ({
+                      ...prev,
+                      fadeOut: parseFloat(e.target.value),
+                    }))
+                  }
+                  min="0"
+                  step="0.5"
+                  disabled={isGenerating}
+                />
+              </div>
+            </div>
+          )}
 
           {backgroundMusic.enabled && (
-            <div className="form-row">
+            <div className="form-row-three">
               <div className="form-group">
                 <label>Volume (0-1)</label>
                 <input
@@ -1057,6 +1247,33 @@ export default function AdvancedTab() {
                 </button>
               </div>
             </div>
+          </div>
+
+          {/* Temp Directory Setting */}
+          <div className="form-group" style={{ marginTop: '12px' }}>
+            <label>Temp / Working Folder (frames are stored here during generation)</label>
+            <div className="input-with-button">
+              <input
+                type="text"
+                value={tempDirectory ? tempDirectory : 'Default (auto)'} 
+                placeholder="Default (auto)"
+                readOnly
+              />
+              <button onClick={handleSelectTempDirectory} disabled={isGenerating}>
+                📁 Choose
+              </button>
+              <button onClick={handleResetTempDirectory} disabled={isGenerating} style={{ backgroundColor: '#6c757d' }}>
+                🧹 Reset
+              </button>
+            </div>
+            <small style={{ color: '#666', fontSize: '11px' }}>
+              The app will create a subfolder named <b>slideshow-generator-temp</b> inside your selected folder.
+            </small>
+            {tempDirectoryStatus ? (
+              <p className="file-info" style={{ marginTop: '6px' }}>
+                {tempDirectoryStatus}
+              </p>
+            ) : null}
           </div>
 
           <div className="form-group">

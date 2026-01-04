@@ -17,6 +17,12 @@ contextBridge.exposeInMainWorld('electronAPI', {
   saveProject: (config) => ipcRenderer.invoke('save-project', config),
   loadProject: () => ipcRenderer.invoke('load-project'),
 
+  // Temp folder setting (where intermediate frames are stored)
+  getTempDirectory: () => ipcRenderer.invoke('get-temp-directory'),
+  setTempDirectory: (dirPath) => ipcRenderer.invoke('set-temp-directory', dirPath),
+  resetTempDirectory: () => ipcRenderer.invoke('reset-temp-directory'),
+  selectTempDirectory: () => ipcRenderer.invoke('select-temp-directory'),
+
   // Batch processing
   selectBatchFile: () => ipcRenderer.invoke('select-batch-file'),
   readBatchFile: (filePath) => ipcRenderer.invoke('read-batch-file', filePath),

@@ -11,6 +11,42 @@ const xttsManager = require('./xttsManager');
 
 ffmpeg.setFfmpegPath(ffmpegPath);
 
+function getRecommendedFfmpegThreads() {
+  // Using all cores makes Electron UI feel "frozen" on many machines.
+  // Leave some CPU for the renderer + OS.
+  const cores = os.cpus().length || 1;
+  return Math.max(1, Math.floor(cores * 0.6));
+}
+
+// Use a predictable temp root to avoid filling the system drive.
+// - Dev: put temp files under the project root (what you requested).
+// - Packaged app: put temp files under Electron userData (writable).
+async function getVideoTempRoot() {
+  // 1) User override (saved in userData/settings.json)
+  try {
+    const settingsPath = path.join(app.getPath('userData'), 'settings.json');
+    const raw = await fs.readFile(settingsPath, 'utf-8').catch(() => '');
+    const parsed = raw ? JSON.parse(raw) : {};
+    const userDir = parsed && typeof parsed.tempDirectory === 'string' ? parsed.tempDirectory.trim() : '';
+    if (userDir) {
+      // Keep our own subfolder so we don't clutter the user's chosen directory.
+      const userTempRoot = path.join(userDir, 'slideshow-generator-temp');
+      await fs.mkdir(userTempRoot, { recursive: true });
+      return userTempRoot;
+    }
+  } catch (_) {
+    // ignore and fall back
+  }
+
+  // 2) Default:
+  // - Dev: project root
+  // - Packaged: userData
+  const baseRoot = app && app.isPackaged ? app.getPath('userData') : path.join(__dirname, '..');
+  const tempRoot = path.join(baseRoot, 'video-temp');
+  await fs.mkdir(tempRoot, { recursive: true });
+  return tempRoot;
+}
+
 // Helper: Parse color hex/rgb/rgba to rgba values
 function parseColor(color) {
   if (color.startsWith('#')) {
@@ -254,8 +290,9 @@ async function generateScrollingVideo(options, progressCallback, shouldCancel) {
     exportThumbnail = false,
   } = options;
 
-  // Create unique temp directory for frames and assets
-  const tempDirPrefix = path.join(app.getPath('temp'), 'scrolling-video-');
+  // Create unique temp directory for frames and assets (NOT system temp)
+  const tempRoot = await getVideoTempRoot();
+  const tempDirPrefix = path.join(tempRoot, 'scrolling-video-');
   const tempDir = await fs.mkdtemp(tempDirPrefix);
 
   try {
@@ -285,6 +322,14 @@ async function generateScrollingVideo(options, progressCallback, shouldCancel) {
     let bgMusicPath = null;
     if (hasBgMusic) {
       bgMusicPath = bgMusicOptions.path;
+    }
+
+    // Background voice (extra audio layer)
+    const bgVoiceOptions = options.backgroundVoice || {};
+    const hasBgVoice = Boolean(bgVoiceOptions.enabled && bgVoiceOptions.path);
+    let bgVoicePath = null;
+    if (hasBgVoice) {
+      bgVoicePath = bgVoiceOptions.path;
     }
 
     // Text styling options
@@ -462,11 +507,9 @@ async function generateScrollingVideo(options, progressCallback, shouldCancel) {
       // Generate frames for this slide with parallel processing
       // Helper function to generate a single frame
       const generateSingleFrame = async (frameNum, globalFrameNum) => {
-        // Yield periodically so the Electron window remains responsive, without paying the cost every frame.
-        // (Rendering uses synchronous canvas operations.)
-        if (frameNum % 5 === 0) {
-          await new Promise((resolve) => setImmediate(resolve));
-        }
+        // Yield frequently so the Electron UI remains responsive.
+        // Rendering uses synchronous canvas operations (draw + toBufferSync) which can starve the event loop.
+        await new Promise((resolve) => setImmediate(resolve));
 
         // Check cancellation before doing heavy work
         if (shouldCancel && shouldCancel()) {
@@ -713,7 +756,7 @@ async function generateScrollingVideo(options, progressCallback, shouldCancel) {
 
     // Mix audio if needed (only if audio was successfully generated)
     let finalVideoPath = videoOutputPath;
-    if ((shouldGenerateNarration && narrationAudioPath) || hasBgMusic) {
+    if ((shouldGenerateNarration && narrationAudioPath) || hasBgMusic || hasBgVoice) {
       finalVideoPath = path.join(tempDir, `${baseFileName}-with-audio.${safeExportFormat}`);
       await mixAllAudio(
         videoOutputPath,
@@ -722,6 +765,10 @@ async function generateScrollingVideo(options, progressCallback, shouldCancel) {
         bgMusicOptions.volume || 0.5,
         bgMusicOptions.fadeIn || 0,
         bgMusicOptions.fadeOut || 0,
+        bgVoicePath,
+        bgVoiceOptions.volume || 0.5,
+        bgVoiceOptions.fadeIn || 0,
+        bgVoiceOptions.fadeOut || 0,
         finalVideoPath,
         progressCallback,
         safeExportFormat
@@ -848,8 +895,8 @@ async function encodeVideo(
 
     const qp = (qualityPreset || 'high').toLowerCase();
 
-    // Use multiple threads for faster encoding (use all available CPU cores)
-    const threadCount = os.cpus().length;
+    // Use multiple threads for faster encoding, but leave CPU headroom for the UI.
+    const threadCount = getRecommendedFfmpegThreads();
     
     if (isWebm) {
       // VP9 speed/quality knobs
@@ -961,6 +1008,10 @@ async function mixAllAudio(
   bgMusicVolume,
   bgMusicFadeIn,
   bgMusicFadeOut,
+  bgVoicePath,
+  bgVoiceVolume,
+  bgVoiceFadeIn,
+  bgVoiceFadeOut,
   outputPath,
   progressCallback,
   exportFormat = 'mp4'
@@ -984,57 +1035,54 @@ async function mixAllAudio(
 
   return new Promise((resolve, reject) => {
     const command = ffmpeg().input(videoPath);
-    let audioFilters = [];
-    let audioMapLabel = '';
+    const audioFilters = [];
+    const mixInputs = [];
 
-    // Handle narration
+    // We will add audio inputs in order and build filter labels accordingly.
+    // Index 0 is video.
+    let nextInputIndex = 1;
+
+    // Narration (pad so it's not shorter than the video in common cases)
     if (narrationPath) {
       command.input(narrationPath);
-      audioFilters.push('[1:a]apad[a1]');
+      audioFilters.push(`[${nextInputIndex}:a]apad[a1]`);
+      mixInputs.push('a1');
+      nextInputIndex += 1;
     }
 
-    // Handle background music
-    if (bgMusicPath) {
-      const inputIndex = narrationPath ? 2 : 1;
-      command.input(bgMusicPath);
-      
-      // Build music filter chain
-      let musicFilter = `[${inputIndex}:a]`;
-      const filterParts = [];
-      
-      // Apply volume if needed
-      if (bgMusicVolume !== 1) {
-        filterParts.push(`volume=${bgMusicVolume}`);
+    // Helper to build a background track filter (music/voice)
+    const addBgTrack = (pathToFile, vol, fadeInSec, fadeOutSec, outLabel) => {
+      if (!pathToFile) return;
+      command.input(pathToFile);
+      let f = `[${nextInputIndex}:a]`;
+      const parts = [];
+      const v = typeof vol === 'number' && Number.isFinite(vol) ? vol : 1;
+      if (v !== 1) parts.push(`volume=${v}`);
+      if (fadeInSec > 0) parts.push(`afade=t=in:st=0:d=${fadeInSec}`);
+      if (fadeOutSec > 0 && videoDuration > 0) {
+        const fadeOutStart = Math.max(0, videoDuration - fadeOutSec);
+        parts.push(`afade=t=out:st=${fadeOutStart}:d=${fadeOutSec}`);
       }
-      
-      // Apply fade in
-      if (bgMusicFadeIn > 0) {
-        filterParts.push(`afade=t=in:st=0:d=${bgMusicFadeIn}`);
-      }
-      
-      // Apply fade out
-      if (bgMusicFadeOut > 0 && videoDuration > 0) {
-        const fadeOutStart = Math.max(0, videoDuration - bgMusicFadeOut);
-        filterParts.push(`afade=t=out:st=${fadeOutStart}:d=${bgMusicFadeOut}`);
-      }
-      
-      // Combine all filter parts
-      if (filterParts.length > 0) {
-        musicFilter += filterParts.join(',');
-      }
-      
-      musicFilter += '[m2]';
-      audioFilters.push(musicFilter);
+      if (parts.length > 0) f += parts.join(',');
+      f += `[${outLabel}]`;
+      audioFilters.push(f);
+      mixInputs.push(outLabel);
+      nextInputIndex += 1;
+    };
 
-      // Mix narration and music if both exist
-      if (narrationPath) {
-        audioFilters.push('[a1][m2]amix=inputs=2:duration=first:dropout_transition=2[aout]');
-        audioMapLabel = 'aout';
-      } else {
-        audioMapLabel = 'm2';
-      }
-    } else if (narrationPath) {
-      audioMapLabel = 'a1';
+    // Background Music
+    addBgTrack(bgMusicPath, bgMusicVolume, bgMusicFadeIn, bgMusicFadeOut, 'm2');
+    // Background Voice
+    addBgTrack(bgVoicePath, bgVoiceVolume, bgVoiceFadeIn, bgVoiceFadeOut, 'v3');
+
+    let audioMapLabel = '';
+    if (mixInputs.length === 1) {
+      audioMapLabel = mixInputs[0];
+    } else if (mixInputs.length > 1) {
+      const inStr = mixInputs.map((l) => `[${l}]`).join('');
+      // duration=first keeps behavior similar to existing implementation (narration first when present).
+      audioFilters.push(`${inStr}amix=inputs=${mixInputs.length}:duration=first:dropout_transition=2[aout]`);
+      audioMapLabel = 'aout';
     }
 
     const safeFormat = (exportFormat || 'mp4').toLowerCase();

@@ -30,6 +30,29 @@ let oauthCallbackServer = null;
 let youtubeAuthWebContents = null;
 let youtubeAuthProfileId = null;
 
+// App settings (persisted in Electron userData)
+function getSettingsPath() {
+  return path.join(app.getPath('userData'), 'settings.json');
+}
+
+async function readAppSettings() {
+  try {
+    const raw = await fs.readFile(getSettingsPath(), 'utf-8');
+    const parsed = JSON.parse(raw || '{}');
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch (_) {
+    return {};
+  }
+}
+
+async function writeAppSettings(nextSettings) {
+  const settingsPath = getSettingsPath();
+  const safe =
+    nextSettings && typeof nextSettings === 'object' ? nextSettings : {};
+  await fs.mkdir(path.dirname(settingsPath), { recursive: true });
+  await fs.writeFile(settingsPath, JSON.stringify(safe, null, 2), 'utf-8');
+}
+
 // Helper: Parse subtitle file (SRT or VTT)
 function parseSubtitleFile(content, format) {
   const subtitles = [];
@@ -335,6 +358,34 @@ function registerIpcHandlers() {
 
   // 📁 Select output directory
   ipcMain.handle('select-output-directory', async () => {
+    const result = await dialog.showOpenDialog({
+      properties: ['openDirectory'],
+    });
+    if (result.canceled) return null;
+    return result.filePaths[0];
+  });
+
+  // 🧰 Temp directory setting (where frames are written during generation)
+  ipcMain.handle('get-temp-directory', async () => {
+    const settings = await readAppSettings();
+    const dir = settings && typeof settings.tempDirectory === 'string' ? settings.tempDirectory : '';
+    return dir;
+  });
+
+  ipcMain.handle('set-temp-directory', async (_event, dirPath) => {
+    const dir = typeof dirPath === 'string' ? dirPath.trim() : '';
+    const settings = await readAppSettings();
+    await writeAppSettings({ ...settings, tempDirectory: dir });
+    return { success: true, tempDirectory: dir };
+  });
+
+  ipcMain.handle('reset-temp-directory', async () => {
+    const settings = await readAppSettings();
+    await writeAppSettings({ ...settings, tempDirectory: '' });
+    return { success: true, tempDirectory: '' };
+  });
+
+  ipcMain.handle('select-temp-directory', async () => {
     const result = await dialog.showOpenDialog({
       properties: ['openDirectory'],
     });

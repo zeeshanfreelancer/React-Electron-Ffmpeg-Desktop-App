@@ -11,6 +11,38 @@ ffmpeg.setFfprobePath(ffmpegPath.replace('ffmpeg', 'ffprobe'));
 
 ffmpeg.setFfmpegPath(ffmpegPath);
 
+function getRecommendedFfmpegThreads() {
+  // Leave CPU headroom for the Electron renderer/UI.
+  const cores = os.cpus().length || 1;
+  return Math.max(1, Math.floor(cores * 0.6));
+}
+
+// Use a predictable temp root to avoid filling the system drive.
+// - Dev: put temp files under the project root.
+// - Packaged app: put temp files under Electron userData (writable).
+async function getVideoTempRoot() {
+  // 1) User override (saved in userData/settings.json)
+  try {
+    const settingsPath = path.join(app.getPath('userData'), 'settings.json');
+    const raw = await fs.readFile(settingsPath, 'utf-8').catch(() => '');
+    const parsed = raw ? JSON.parse(raw) : {};
+    const userDir = parsed && typeof parsed.tempDirectory === 'string' ? parsed.tempDirectory.trim() : '';
+    if (userDir) {
+      const userTempRoot = path.join(userDir, 'slideshow-generator-temp');
+      await fs.mkdir(userTempRoot, { recursive: true });
+      return userTempRoot;
+    }
+  } catch (_) {
+    // ignore and fall back
+  }
+
+  // 2) Default dev/packaged behavior
+  const baseRoot = app && app.isPackaged ? app.getPath('userData') : path.join(__dirname, '..');
+  const tempRoot = path.join(baseRoot, 'video-temp');
+  await fs.mkdir(tempRoot, { recursive: true });
+  return tempRoot;
+}
+
 /**
  * Generate pan/zoom/shake video from images
  * Similar to the Python MoviePy implementation
@@ -145,7 +177,8 @@ async function createVideoFromImages(
   videoIndex = null,
   totalVideos = null
 ) {
-  const tempDirPrefix = path.join(app.getPath('temp'), 'panzoom-video-');
+  const tempRoot = await getVideoTempRoot();
+  const tempDirPrefix = path.join(tempRoot, 'panzoom-video-');
   const tempDir = await fs.mkdtemp(tempDirPrefix);
 
   try {
@@ -572,7 +605,7 @@ async function encodeVideo(tempDir, outputPath, fps, totalFrames) {
         '-c:v libx264',
         '-pix_fmt yuv420p',
         '-preset fast',
-        `-threads ${os.cpus().length}`,
+        `-threads ${getRecommendedFfmpegThreads()}`,
         '-movflags +faststart',
         '-crf 23',
         '-r', fps.toString(), // Output frame rate

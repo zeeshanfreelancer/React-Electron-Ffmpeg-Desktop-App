@@ -58,6 +58,8 @@ function ScrollingTextVideo() {
 
   // Audio
   const [backgroundMusic, setBackgroundMusic] = useState({ enabled: false, path: '', volume: 0.5, fadeIn: 0, fadeOut: 0 });
+  // Background voice (extra audio layer; shown in XTTS mode)
+  const [backgroundVoice, setBackgroundVoice] = useState({ enabled: false, path: '', volume: 0.5, fadeIn: 0, fadeOut: 0 });
 
   // Multi-slide
   const [slides, setSlides] = useState([]);
@@ -68,6 +70,9 @@ function ScrollingTextVideo() {
   const [qualityPreset, setQualityPreset] = useState('high');
   const [bitrate, setBitrate] = useState('');
   const [outputDirectory, setOutputDirectory] = useState('');
+  // Temp folder setting (global, not part of exported project)
+  const [tempDirectory, setTempDirectory] = useState('');
+  const [tempDirectoryStatus, setTempDirectoryStatus] = useState('');
 
   // Export options
   const [exportGif, setExportGif] = useState(false);
@@ -206,6 +211,24 @@ function ScrollingTextVideo() {
       cancelled = true;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Load saved temp directory setting on mount (global app setting)
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        if (!window.electronAPI || !window.electronAPI.getTempDirectory) return;
+        const dir = await window.electronAPI.getTempDirectory();
+        if (cancelled) return;
+        setTempDirectory(typeof dir === 'string' ? dir : '');
+      } catch (_) {
+        if (!cancelled) setTempDirectory('');
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   // Load XTTS voices when provider is selected (may start XTTS sidecar)
@@ -1127,6 +1150,19 @@ function ScrollingTextVideo() {
     setScrollingStatus('');
   };
 
+  const handleSelectBackgroundVoice = async () => {
+    const path = await window.electronAPI.selectAudio();
+    if (path) {
+      setBackgroundVoice(prev => ({ ...prev, path, enabled: true }));
+      setScrollingStatus('');
+    }
+  };
+
+  const handleRemoveBackgroundVoice = () => {
+    setBackgroundVoice({ enabled: false, path: '', volume: 0.5, fadeIn: 0, fadeOut: 0 });
+    setScrollingStatus('');
+  };
+
   const handleSelectSubtitle = async () => {
     const path = await window.electronAPI.selectSubtitle();
     if (path) {
@@ -1150,6 +1186,32 @@ function ScrollingTextVideo() {
     if (path) {
       setOutputDirectory(path);
       setScrollingStatus('');
+    }
+  };
+
+  const handleSelectTempDirectory = async () => {
+    try {
+      if (!window.electronAPI || !window.electronAPI.selectTempDirectory) return;
+      const selected = await window.electronAPI.selectTempDirectory();
+      if (!selected) return;
+      if (window.electronAPI.setTempDirectory) {
+        await window.electronAPI.setTempDirectory(selected);
+      }
+      setTempDirectory(selected);
+      setTempDirectoryStatus(`✅ Temp folder set: ${selected}`);
+    } catch (err) {
+      setTempDirectoryStatus(`❌ Failed to set temp folder: ${err?.message ? String(err.message) : String(err)}`);
+    }
+  };
+
+  const handleResetTempDirectory = async () => {
+    try {
+      if (!window.electronAPI || !window.electronAPI.resetTempDirectory) return;
+      await window.electronAPI.resetTempDirectory();
+      setTempDirectory('');
+      setTempDirectoryStatus('🧹 Temp folder reset to default');
+    } catch (err) {
+      setTempDirectoryStatus(`❌ Failed to reset temp folder: ${err?.message ? String(err.message) : String(err)}`);
     }
   };
 
@@ -1398,6 +1460,7 @@ function ScrollingTextVideo() {
       backgroundCrop,
       backgroundRotation,
       backgroundMusic,
+      backgroundVoice,
       slides: useMultiSlide && slides.length > 0 ? slides : null,
       exportFormat,
       qualityPreset,
@@ -1440,6 +1503,7 @@ function ScrollingTextVideo() {
     if (config.backgroundCrop) setBackgroundCrop(config.backgroundCrop);
     if (config.backgroundRotation) setBackgroundRotation(config.backgroundRotation);
     if (config.backgroundMusic) setBackgroundMusic(config.backgroundMusic);
+    if (config.backgroundVoice) setBackgroundVoice(config.backgroundVoice);
     if (config.slides) {
       setSlides(config.slides);
       setUseMultiSlide(true);
@@ -1552,6 +1616,7 @@ function ScrollingTextVideo() {
     setBackgroundCrop({ enabled: false, x: 0, y: 0, width: null, height: null });
     setBackgroundRotation(0);
     setBackgroundMusic({ enabled: false, path: '', volume: 0.5, fadeIn: 0, fadeOut: 0 });
+    setBackgroundVoice({ enabled: false, path: '', volume: 0.5, fadeIn: 0, fadeOut: 0 });
     setSlides([]);
     setUseMultiSlide(false);
     setExportFormat('mp4');
@@ -1679,6 +1744,7 @@ function ScrollingTextVideo() {
       backgroundCrop: { enabled: false, x: 0, y: 0, width: null, height: null },
       backgroundRotation: 0,
       backgroundMusic: { enabled: false, path: '', volume: 0.5, fadeIn: 0, fadeOut: 0 },
+      backgroundVoice: { enabled: false, path: '', volume: 0.5, fadeIn: 0, fadeOut: 0 },
       slides: null,
       exportFormat: 'mp4',
       qualityPreset: 'high',
@@ -1850,12 +1916,15 @@ function ScrollingTextVideo() {
     backgroundCrop,
     backgroundRotation,
     backgroundMusic,
+    backgroundVoice,
     slides,
     useMultiSlide,
     exportFormat,
     qualityPreset,
     bitrate,
     outputDirectory,
+    tempDirectory,
+    tempDirectoryStatus,
     exportGif,
     exportImageSequence,
     exportThumbnail,
@@ -1963,12 +2032,15 @@ function ScrollingTextVideo() {
     setBackgroundCrop,
     setBackgroundRotation,
     setBackgroundMusic,
+    setBackgroundVoice,
     setSlides,
     setUseMultiSlide,
     setExportFormat,
     setQualityPreset,
     setBitrate,
     setOutputDirectory,
+    setTempDirectory,
+    setTempDirectoryStatus,
     setExportGif,
     setExportImageSequence,
     setExportThumbnail,
@@ -1983,8 +2055,12 @@ function ScrollingTextVideo() {
     handleSelectVideo,
     handleSelectAudio,
     handleRemoveAudio,
+    handleSelectBackgroundVoice,
+    handleRemoveBackgroundVoice,
     handleSelectSubtitle,
     handleSelectOutputDirectory,
+    handleSelectTempDirectory,
+    handleResetTempDirectory,
     handleSocialPreset,
     handleGenerate,
     handleCancel,
