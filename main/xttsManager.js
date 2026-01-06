@@ -1,6 +1,7 @@
 const path = require('path');
 const fs = require('fs');
 const http = require('http');
+const net = require('net');
 const childProcess = require('child_process');
 const { app } = require('electron');
 
@@ -55,6 +56,20 @@ function getPaths() {
     modelsDir: path.join(root, 'models'),
     voicesDir: path.join(root, 'voices'),
   };
+}
+
+// Check if a TCP port is available
+function isPortFree(port) {
+  return new Promise((resolve) => {
+    const server = net.createServer();
+    server.once('error', () => {
+      resolve(false);
+    });
+    server.once('listening', () => {
+      server.close(() => resolve(true));
+    });
+    server.listen(port, '127.0.0.1');
+  });
 }
 
 function listVoicesFromDir(voicesDir) {
@@ -281,8 +296,56 @@ async function waitForHealthOrExit(baseUrl, proc, { timeoutMs = 60000 } = {}) {
   return false;
 }
 
-async function ensureRunning({ preWarmModel = false } = {}) {
-  console.log('[xttsManager] ensureRunning() called', { preWarmModel });
+async function ensureRunning({ preWarmModel = false, forceNew = false } = {}) {
+  console.log('[xttsManager] ensureRunning() called', { preWarmModel, forceNew });
+
+  // If forceNew is true, kill any existing server first and wait for it to fully terminate
+  if (forceNew) {
+    console.log('[xttsManager] forceNew=true, stopping existing server...');
+    const oldProc = xttsProc;
+    stop();
+    xttsBaseUrl = null;
+    xttsPort = 8045;
+    
+    // Wait for the process to actually exit
+    if (oldProc) {
+      const maxWait = 5000; // 5 seconds max
+      const start = Date.now();
+      while (oldProc.exitCode === null && Date.now() - start < maxWait) {
+        // eslint-disable-next-line no-await-in-loop
+        await new Promise((r) => setTimeout(r, 100));
+      }
+      if (oldProc.exitCode === null) {
+        console.warn('[xttsManager] Process did not exit within timeout, forcing kill...');
+        try {
+          oldProc.kill('SIGKILL');
+        } catch (_) {
+          // ignore
+        }
+      }
+    }
+    
+    // Wait for the port to be free (health check should fail)
+    const base = `http://127.0.0.1:${xttsPort}`;
+    const maxPortWait = 3000; // 3 seconds max
+    const portStart = Date.now();
+    while (Date.now() - portStart < maxPortWait) {
+      // eslint-disable-next-line no-await-in-loop
+      const healthy = await isHealthy(base);
+      if (!healthy) {
+        console.log('[xttsManager] Port is now free');
+        break;
+      }
+      // eslint-disable-next-line no-await-in-loop
+      await new Promise((r) => setTimeout(r, 200));
+    }
+    
+    // If port is still in use, try next port
+    if (await isHealthy(base)) {
+      console.log('[xttsManager] Port still in use after cleanup, will try next port');
+      xttsPort = 8046; // Start on next port
+    }
+  }
 
   // Prevent concurrent startups (multiple callers at the same time).
   // This is important because the renderer can request voices twice in dev (React StrictMode),
@@ -300,7 +363,7 @@ async function ensureRunning({ preWarmModel = false } = {}) {
   }
 
   ensureRunningPromise = (async () => {
-  if (xttsStarting && xttsBaseUrl) {
+  if (xttsStarting && xttsBaseUrl && !forceNew) {
     console.log('[xttsManager] Already starting, waiting for health:', xttsBaseUrl);
     const ok = await waitForHealthOrExit(xttsBaseUrl, xttsProc, { timeoutMs: 60000 });
     if (ok) {
@@ -314,7 +377,8 @@ async function ensureRunning({ preWarmModel = false } = {}) {
     }
   }
   // If we already have a base URL and it's healthy, verify it's actually working
-  if (xttsBaseUrl && (await isHealthy(xttsBaseUrl))) {
+  // Skip this check if forceNew is true (we already killed the server above)
+  if (!forceNew && xttsBaseUrl && (await isHealthy(xttsBaseUrl))) {
     // Quick check: try to get health status to see if server is responsive
     try {
       const healthResp = await httpRequest({ method: 'GET', url: `${xttsBaseUrl}/health`, timeoutMs: 2000 });
@@ -332,13 +396,16 @@ async function ensureRunning({ preWarmModel = false } = {}) {
   }
 
   // Try to attach to an already-running service on the known port first.
+  // Skip this check if forceNew is true (we want a fresh server)
   const base = `http://127.0.0.1:${xttsPort}`;
-  console.log('[xttsManager] Checking if server already running on:', base);
-  if (await isHealthy(base)) {
-    console.log('[xttsManager] Found existing healthy server');
-    xttsBaseUrl = base;
-    xttsStarting = false;
-    return { baseUrl: xttsBaseUrl, port: xttsPort };
+  if (!forceNew) {
+    console.log('[xttsManager] Checking if server already running on:', base);
+    if (await isHealthy(base)) {
+      console.log('[xttsManager] Found existing healthy server');
+      xttsBaseUrl = base;
+      xttsStarting = false;
+      return { baseUrl: xttsBaseUrl, port: xttsPort };
+    }
   }
 
   console.log('[xttsManager] No existing server, spawning new one...');
@@ -346,7 +413,8 @@ async function ensureRunning({ preWarmModel = false } = {}) {
   for (let p = xttsPort; p < xttsPort + 10; p++) {
     const candidate = `http://127.0.0.1:${p}`;
     console.log('[xttsManager] Trying port:', p);
-    if (await isHealthy(candidate)) {
+    // If forceNew is true, skip checking for existing healthy servers (we want a fresh one)
+    if (!forceNew && await isHealthy(candidate)) {
       console.log('[xttsManager] Found healthy server on port:', p);
       xttsPort = p;
       xttsBaseUrl = candidate;
@@ -358,6 +426,12 @@ async function ensureRunning({ preWarmModel = false } = {}) {
         });
       }
       return { baseUrl: xttsBaseUrl, port: xttsPort };
+    }
+
+    // If port is not free (e.g., TIME_WAIT from previous process), skip it
+    if (!(await isPortFree(p))) {
+      console.log('[xttsManager] Port not free, skipping:', p);
+      continue;
     }
 
     try {
@@ -507,22 +581,16 @@ async function synthesizeWav({ text, language = 'en', voiceId = '', outPath, pro
   for (let attempt = 0; attempt < maxRetries; attempt++) {
     let simulatedProgressInterval = null;
     try {
-      // Only restart if the previous attempt suggested it would help
-      if (attempt > 0 && restartNextAttempt) {
+      // Stage 1: Ensure server is running (10-30% depending on if it needs to start)
+      // If we need to restart due to a previous model initialization error, use forceNew
+      const shouldForceNew = attempt > 0 && restartNextAttempt;
+      if (shouldForceNew) {
         console.log('[xttsManager] Restarting XTTS server due to previous failure...');
         reportProgress(5, 'Restarting XTTS server...');
-        stop();
-        // Clear the base URL to force a fresh server start
-        xttsBaseUrl = null;
-        xttsPort = 8045;
-        // Wait a bit for the old process to fully terminate
-        await new Promise((r) => setTimeout(r, 1000));
-        restartNextAttempt = false;
+        restartNextAttempt = false; // Reset after capturing the value
       }
-      
-      // Stage 1: Ensure server is running (10-30% depending on if it needs to start)
       reportProgress(10, 'Connecting to XTTS server...');
-      const { baseUrl } = await ensureRunning();
+      const { baseUrl } = await ensureRunning({ forceNew: shouldForceNew });
       reportProgress(30, 'XTTS server ready');
       
       // Stage 2: Prepare request (30-35%)
