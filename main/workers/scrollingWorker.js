@@ -400,6 +400,18 @@ async function mixAllAudioSpawn({
   bgVoice,
   outputPath,
 }) {
+  console.log('[scrollingWorker] mixAllAudioSpawn called:', {
+    videoPath,
+    narrationPath,
+    narrationExists: narrationPath ? fssync.existsSync(narrationPath) : false,
+    narrationSize: narrationPath && fssync.existsSync(narrationPath) ? fssync.statSync(narrationPath).size : 0,
+    bgMusicPath,
+    bgMusicExists: bgMusicPath ? fssync.existsSync(bgMusicPath) : false,
+    bgVoicePath,
+    bgVoiceExists: bgVoicePath ? fssync.existsSync(bgVoicePath) : false,
+    outputPath,
+  });
+  
   sendProgress({ type: 'audio-mix', message: 'Mixing audio with video...' });
 
   const safeFormat = String(exportFormat || 'mp4').toLowerCase();
@@ -517,11 +529,13 @@ async function generateInWorker(options, paths) {
 
   const tempRoot = (paths && paths.tempRoot) || path.join(process.cwd(), 'video-temp');
   await fs.mkdir(tempRoot, { recursive: true });
+  console.log('[scrollingWorker] Temp root:', tempRoot);
 
   const tempDir = await fs.mkdtemp(path.join(tempRoot, 'scrolling-video-'));
   currentTempDirPath = tempDir;
   const timestamp = Date.now();
   const baseFileName = `scrolling-video-${timestamp}`;
+  console.log('[scrollingWorker] Temp dir:', tempDir);
 
   // Slides
   const slideConfigs = slides && slides.length > 0 ? slides : [
@@ -610,8 +624,25 @@ async function generateInWorker(options, paths) {
             const onMsg = (m) => {
               if (!m || m.type !== 'xtts-result' || m.requestId !== requestId) return;
               process.off('message', onMsg);
-              if (m.ok) resolve();
-              else reject(new Error(m.error || 'XTTS synthesis failed'));
+              if (m.ok) {
+                // Verify the file was actually created
+                setTimeout(() => {
+                  if (fssync.existsSync(narrationWavPath)) {
+                    const stats = fssync.statSync(narrationWavPath);
+                    console.log('[scrollingWorker] XTTS audio file verified:', narrationWavPath, 'size:', stats.size, 'bytes');
+                    if (stats.size > 0) {
+                      resolve();
+                    } else {
+                      reject(new Error('XTTS audio file is empty'));
+                    }
+                  } else {
+                    console.error('[scrollingWorker] XTTS audio file not found after synthesis:', narrationWavPath);
+                    reject(new Error('XTTS audio file was not created'));
+                  }
+                }, 500); // Give it a moment to ensure file is written
+              } else {
+                reject(new Error(m.error || 'XTTS synthesis failed'));
+              }
             };
             process.on('message', onMsg);
             const ok = safeSendToParent({
@@ -649,9 +680,19 @@ async function generateInWorker(options, paths) {
         narrationAudioPath = narrationMp3Path;
         return narrationAudioPath;
       })().catch((err) => {
+        // Log the error with full details
+        const errorMsg = err.message || String(err);
+        console.error('[scrollingWorker] Narration generation failed:', errorMsg);
+        console.error('[scrollingWorker] Error stack:', err.stack);
+        
+        // Send error to UI so user knows what happened
+        sendProgress({
+          type: 'audio',
+          progress: 0,
+          message: `Narration failed: ${errorMsg}. Video will be generated without audio.`,
+        });
+        
         // Non-fatal: continue without narration
-        // eslint-disable-next-line no-console
-        console.error('[scrollingWorker] narration failed:', err.message || err);
         return null;
       })
     : Promise.resolve(null);
@@ -896,10 +937,32 @@ async function generateInWorker(options, paths) {
   // Wait for audio
   const audioPath = shouldGenerateNarration ? await audioPromise : null;
 
+  // Verify audio file exists if it was generated
+  if (shouldGenerateNarration && audioPath) {
+    try {
+      const audioExists = fssync.existsSync(audioPath);
+      const audioStats = audioExists ? fssync.statSync(audioPath) : null;
+      console.log('[scrollingWorker] Audio file check:', {
+        path: audioPath,
+        exists: audioExists,
+        size: audioStats ? audioStats.size : 0,
+      });
+      if (!audioExists || !audioStats || audioStats.size === 0) {
+        console.error('[scrollingWorker] Audio file is missing or empty, proceeding without audio');
+        sendProgress({
+          type: 'audio-mix',
+          message: 'Warning: Audio file not found or empty, video will be generated without narration.',
+        });
+      }
+    } catch (err) {
+      console.error('[scrollingWorker] Error checking audio file:', err.message);
+    }
+  }
+
   // Mix audio (optional)
   const durationSec = totalFramesAllSlides / fps;
   let finalTempPath = videoTmpPath;
-  if ((shouldGenerateNarration && audioPath) || hasBgMusic || hasBgVoice) {
+  if ((shouldGenerateNarration && audioPath && fssync.existsSync(audioPath)) || hasBgMusic || hasBgVoice) {
     const withAudioPath = path.join(tempDir, `${baseFileName}-with-audio.${String(exportFormat).toLowerCase()}`);
     await mixAllAudioSpawn({
       videoPath: videoTmpPath,

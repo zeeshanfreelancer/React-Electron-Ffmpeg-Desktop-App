@@ -1,0 +1,33 @@
+# Git LFS Configuration
+# Track large binary files with Git LFS
+
+# XTTS Model Files (very large, ~1-2GB)
+xtts/models/**/*.pth filter=lfs diff=lfs merge=lfs -text
+xtts/models/**/*.bin filter=lfs diff=lfs merge=lfs -text
+
+# XTTS Executables and Binaries
+xtts/bin/**/*.exe filter=lfs diff=lfs merge=lfs -text
+xtts/bin/**/*.dll filter=lfs diff=lfs merge=lfs -text
+xtts/bin/**/*.pyd filter=lfs diff=lfs merge=lfs -text
+xtts/bin/**/*.so filter=lfs diff=lfs merge=lfs -text
+xtts/bin/**/*.dylib filter=lfs diff=lfs merge=lfs -text
+
+# PyInstaller build artifacts (if needed)
+xtts/server/dist/**/*.exe filter=lfs diff=lfs merge=lfs -text
+
+# Large archive files
+*.zip filter=lfs diff=lfs merge=lfs -text
+*.7z filter=lfs diff=lfs merge=lfs -text
+*.tar.gz filter=lfs diff=lfs merge=lfs -text
+
+# Video files (if any sample videos are included)
+*.mp4 filter=lfs diff=lfs merge=lfs -text
+*.avi filter=lfs diff=lfs merge=lfs -text
+*.mov filter=lfs diff=lfs merge=lfs -text
+
+# Audio files (voice samples - these are small but can use LFS if preferred)
+# Uncomment if you want voice files in LFS:
+# xtts/voices/**/*.mp3 filter=lfs diff=lfs merge=lfs -text
+# xtts/voices/**/*.wav filter=lfs diff=lfs merge=lfs -text
+
+

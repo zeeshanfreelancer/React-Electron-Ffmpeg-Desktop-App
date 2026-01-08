@@ -1,4 +1,4 @@
-const { app, BrowserWindow, ipcMain, dialog, Menu, shell } = require('electron');
+const { app, BrowserWindow, ipcMain, dialog, Menu, shell, session } = require('electron');
 const path = require('path');
 const fs = require('fs').promises;
 const childProcess = require('child_process');
@@ -575,17 +575,46 @@ function registerIpcHandlers() {
         if (msg.type === 'xtts-synthesize' && msg.requestId && msg.payload) {
           const requestId = msg.requestId;
           const payload = msg.payload || {};
+          const outPath = String(payload.outPath || '');
+          console.log('[main] XTTS synthesis request:', { 
+            requestId, 
+            textLength: String(payload.text || '').length, 
+            outPath: outPath,
+            outPathExists: require('fs').existsSync(outPath) ? 'before' : 'not yet'
+          });
           try {
-            await xttsManager.synthesizeWav({
+            const result = await xttsManager.synthesizeWav({
               text: String(payload.text || ''),
               language: String(payload.language || 'en'),
               voiceId: String(payload.voiceId || ''),
-              outPath: String(payload.outPath || ''),
+              outPath: outPath,
               progressCallback: (p) => sendProgress(p),
             });
-            safeWorkerSend({ type: 'xtts-result', requestId, ok: true });
+            
+            // Verify file exists after synthesis
+            const fs = require('fs');
+            if (fs.existsSync(outPath)) {
+              const stats = fs.statSync(outPath);
+              console.log('[main] XTTS synthesis succeeded:', {
+                result,
+                fileSize: stats.size,
+                filePath: outPath
+              });
+              if (stats.size > 0) {
+                safeWorkerSend({ type: 'xtts-result', requestId, ok: true });
+              } else {
+                throw new Error('XTTS audio file is empty after synthesis');
+              }
+            } else {
+              throw new Error(`XTTS audio file was not created at: ${outPath}`);
+            }
           } catch (e) {
-            safeWorkerSend({ type: 'xtts-result', requestId, ok: false, error: e.message || String(e) });
+            const errorMsg = e.message || String(e);
+            console.error('[main] XTTS synthesis failed:', errorMsg);
+            console.error('[main] XTTS error stack:', e.stack);
+            console.error('[main] XTTS outPath was:', outPath);
+            console.error('[main] XTTS outPath exists:', require('fs').existsSync(outPath));
+            safeWorkerSend({ type: 'xtts-result', requestId, ok: false, error: errorMsg });
           }
           return;
         }
@@ -1051,6 +1080,58 @@ process.on('unhandledRejection', (reason, promise) => {
 });
 
 app.whenReady().then(() => {
+  // Set Content Security Policy to improve security
+  // This prevents XSS attacks and restricts resource loading
+  // Must be set inside app.whenReady() because defaultSession is only available after app is ready
+  
+  // CSP configuration
+  // In dev mode: allow Vite HMR (localhost:5173) and unsafe-eval for HMR
+  // In production: stricter policy without unsafe-eval
+  const isDev = !!process.env.ELECTRON_START_URL;
+  
+  // Production CSP (stricter, no unsafe-eval)
+  const productionCSP = [
+    "default-src 'self'",
+    "script-src 'self'",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob: file:",
+    "font-src 'self' data:",
+    "connect-src 'self' https://*",
+    "media-src 'self' blob: file:",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'none'"
+  ].join('; ');
+  
+  // Dev CSP (allows Vite HMR and inline scripts)
+  const devCSP = [
+    "default-src 'self'",
+    "script-src 'self' 'unsafe-inline' 'unsafe-eval' http://localhost:5173 ws://localhost:5173",
+    "style-src 'self' 'unsafe-inline'",
+    "img-src 'self' data: blob: file:",
+    "font-src 'self' data:",
+    "connect-src 'self' http://localhost:* https://* ws://localhost:*",
+    "media-src 'self' blob: file:",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "form-action 'self'",
+    "frame-ancestors 'none'"
+  ].join('; ');
+
+  const cspDirectives = isDev ? devCSP : productionCSP;
+  
+  console.log(`[main] Setting Content Security Policy (${isDev ? 'dev' : 'production'} mode)`);
+
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    callback({
+      responseHeaders: {
+        ...details.responseHeaders,
+        'Content-Security-Policy': [cspDirectives]
+      }
+    });
+  });
+
   // Initialize YouTube profile storage in Electron userData
   youtubeUploader.init({ storageDir: path.join(app.getPath('userData'), 'youtube') });
   registerIpcHandlers();
@@ -1080,12 +1161,21 @@ app.on('window-all-closed', () => {
       oauthCallbackServer.close();
       oauthCallbackServer = null;
     }
-    // Stop XTTS sidecar if running
+    // Stop XTTS sidecar if running (this also cleans up temp dirs)
     try {
       xttsManager.stop();
     } catch (_) {
       // ignore
     }
     app.quit();
+  }
+});
+
+// Cleanup on app quit (before-quit fires before window-all-closed)
+app.on('before-quit', () => {
+  try {
+    xttsManager.stop();
+  } catch (_) {
+    // ignore
   }
 });

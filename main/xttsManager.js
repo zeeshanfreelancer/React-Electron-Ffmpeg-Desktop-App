@@ -17,22 +17,41 @@ const XTTS_PREWARM_TIMEOUT_MS = 180000; // 3 minutes
 function getXttsRootDir() {
   // In packaged builds, electron-builder extraResources land under process.resourcesPath
   if (app && app.isPackaged) {
-    return path.join(process.resourcesPath, 'xtts');
+    // process.resourcesPath points to the resources directory (where extraResources are placed)
+    // In Electron, this is typically: <app>/resources/ (Windows) or <app>/Resources/ (macOS)
+    const resourcesPath = process.resourcesPath || path.join(process.execPath, '..', 'resources');
+    const xttsPath = path.join(resourcesPath, 'xtts');
+    console.log('[xttsManager] Packaged build - XTTS root:', xttsPath);
+    console.log('[xttsManager] process.resourcesPath:', process.resourcesPath);
+    console.log('[xttsManager] process.execPath:', process.execPath);
+    return xttsPath;
   }
   // Dev: repo root/xtts
-  return path.join(__dirname, '..', 'xtts');
+  const devPath = path.join(__dirname, '..', 'xtts');
+  console.log('[xttsManager] Dev build - XTTS root:', devPath);
+  return devPath;
 }
 
 function getPaths() {
   const root = getXttsRootDir();
+  console.log('[xttsManager] getPaths() - root:', root);
+  console.log('[xttsManager] getPaths() - root exists:', fs.existsSync(root));
+  
   // Prefer a PyInstaller "onedir" bundle (avoids huge temp extraction + decompression failures)
   const oneDirExe = path.join(root, 'bin', 'xtts-server', 'xtts-server.exe');
   const oneFileExe = path.join(root, 'bin', 'xtts-server.exe');
   const pythonWrapper = path.join(root, 'server', 'xtts_server_wrapper.py');
+  
+  console.log('[xttsManager] Checking executables:');
+  console.log('[xttsManager]   - oneDirExe:', oneDirExe, 'exists:', fs.existsSync(oneDirExe));
+  console.log('[xttsManager]   - oneFileExe:', oneFileExe, 'exists:', fs.existsSync(oneFileExe));
+  console.log('[xttsManager]   - pythonWrapper:', pythonWrapper, 'exists:', fs.existsSync(pythonWrapper));
+  
   // Some builds of the "onedir" bundle can be incomplete (notably missing sklearn internals),
   // causing the process to crash immediately. Detect that case and fall back to the one-file exe.
   const oneDirSklearnCheckBuildDir = path.join(root, 'bin', 'xtts-server', '_internal', 'sklearn', '__check_build');
   const oneDirLooksHealthy = fs.existsSync(oneDirExe) && fs.existsSync(oneDirSklearnCheckBuildDir);
+  console.log('[xttsManager]   - oneDirLooksHealthy:', oneDirLooksHealthy);
   
   // Determine which executable to use.
   // Prefer Python wrapper (most reliable) > onedir > onefile
@@ -43,18 +62,31 @@ function getPaths() {
     // Python wrapper is most reliable - prefer it when available
     exe = pythonWrapper;
     usePythonWrapper = true;
+    console.log('[xttsManager] Using Python wrapper');
   } else if (oneDirLooksHealthy) {
     exe = oneDirExe;
+    console.log('[xttsManager] Using onedir executable');
   } else if (fs.existsSync(oneFileExe)) {
     exe = oneFileExe;
+    console.log('[xttsManager] Using onefile executable');
+  } else {
+    console.error('[xttsManager] No XTTS executable found!');
   }
+  
+  const modelsDir = path.join(root, 'models');
+  const voicesDir = path.join(root, 'voices');
+  
+  console.log('[xttsManager] Final paths:');
+  console.log('[xttsManager]   - exe:', exe);
+  console.log('[xttsManager]   - modelsDir:', modelsDir, 'exists:', fs.existsSync(modelsDir));
+  console.log('[xttsManager]   - voicesDir:', voicesDir, 'exists:', fs.existsSync(voicesDir));
   
   return {
     root,
     exe,
     usePythonWrapper,
-    modelsDir: path.join(root, 'models'),
-    voicesDir: path.join(root, 'voices'),
+    modelsDir,
+    voicesDir,
   };
 }
 
@@ -219,6 +251,26 @@ function spawnXttsServer({ port }) {
   try {
     tempDir = path.join(app.getPath('userData'), 'xtts-tmp');
     fs.mkdirSync(tempDir, { recursive: true });
+    console.log('[xttsManager] Using temp dir for PyInstaller extraction:', tempDir);
+    
+    // Clean up old extraction directories on startup (PyInstaller onefile creates _MEI* folders)
+    // These can accumulate if the server crashes or is killed abruptly
+    try {
+      const entries = fs.readdirSync(tempDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (entry.isDirectory() && entry.name.startsWith('_MEI')) {
+          const oldDir = path.join(tempDir, entry.name);
+          try {
+            fs.rmSync(oldDir, { recursive: true, force: true });
+            console.log('[xttsManager] Cleaned up old PyInstaller extraction:', oldDir);
+          } catch (e) {
+            console.warn('[xttsManager] Failed to clean up old extraction dir:', oldDir, e.message);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[xttsManager] Failed to scan temp dir for cleanup:', e.message);
+    }
   } catch (_) {
     tempDir = undefined;
   }
@@ -563,6 +615,8 @@ async function listVoices() {
 }
 
 async function synthesizeWav({ text, language = 'en', voiceId = '', outPath, progressCallback }) {
+  console.log('[xttsManager] synthesizeWav() called:', { textLength: text?.length || 0, language, voiceId, outPath });
+  
   // Try once, and if we get a timeout or initialization error, restart server and retry
   const maxRetries = 2;
   let lastError = null;
@@ -695,7 +749,34 @@ async function synthesizeWav({ text, language = 'en', voiceId = '', outPath, pro
       
       // Stage 4: Save audio file (95-100%)
       reportProgress(95, 'Saving audio file...');
-      fs.writeFileSync(outPath, resp.body);
+      const audioData = resp.body;
+      if (!audioData || audioData.length === 0) {
+        throw new Error('XTTS returned empty audio data');
+      }
+      console.log('[xttsManager] Saving audio file:', outPath, 'size:', audioData.length, 'bytes');
+      
+      // Ensure directory exists
+      const outDir = path.dirname(outPath);
+      if (!fs.existsSync(outDir)) {
+        console.log('[xttsManager] Creating directory for audio file:', outDir);
+        fs.mkdirSync(outDir, { recursive: true });
+      }
+      
+      // Write file
+      fs.writeFileSync(outPath, audioData);
+      
+      // Verify file was written
+      if (!fs.existsSync(outPath)) {
+        throw new Error(`Failed to write audio file: ${outPath}`);
+      }
+      
+      const savedSize = fs.statSync(outPath).size;
+      console.log('[xttsManager] Audio file saved successfully, size:', savedSize, 'bytes');
+      
+      if (savedSize === 0) {
+        throw new Error('Audio file was created but is empty');
+      }
+      
       reportProgress(100, 'Audio generation complete');
       return outPath;
     } catch (err) {
@@ -729,6 +810,29 @@ function stop() {
     }
     xttsProc = null;
     xttsBaseUrl = null;
+  }
+  
+  // Clean up PyInstaller extraction temp dirs after server stops
+  if (app) {
+    try {
+      const tempDir = path.join(app.getPath('userData'), 'xtts-tmp');
+      if (fs.existsSync(tempDir)) {
+        const entries = fs.readdirSync(tempDir, { withFileTypes: true });
+        for (const entry of entries) {
+          if (entry.isDirectory() && entry.name.startsWith('_MEI')) {
+            const oldDir = path.join(tempDir, entry.name);
+            try {
+              fs.rmSync(oldDir, { recursive: true, force: true });
+              console.log('[xttsManager] Cleaned up PyInstaller extraction after stop:', oldDir);
+            } catch (e) {
+              console.warn('[xttsManager] Failed to clean up extraction dir:', oldDir, e.message);
+            }
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('[xttsManager] Failed to cleanup temp dirs on stop:', e.message);
+    }
   }
 }
 

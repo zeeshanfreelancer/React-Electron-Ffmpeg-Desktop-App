@@ -23,14 +23,16 @@ dist-ssr
 *.sln
 *.sw?
 
-# XTTS - Large binary files and build artifacts
-xtts/bin/
+# XTTS - Python cache and build artifacts (NOT tracked)
 xtts/server/.venv/
 xtts/server/build/
-xtts/server/dist/
-xtts/models/
 xtts/server/__pycache__/
 xtts/server/**/__pycache__/
+
+# XTTS - Large files are tracked via Git LFS (see .gitattributes)
+# xtts/bin/ - Tracked via LFS
+# xtts/models/ - Tracked via LFS
+# xtts/server/dist/ - Tracked via LFS if needed
 
 # Python
 *.pyc
