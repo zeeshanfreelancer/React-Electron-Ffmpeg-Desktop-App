@@ -527,15 +527,33 @@ async function generateInWorker(options, paths) {
   const outDir = outputDirectory || (paths && paths.defaultOutputDir) || '';
   if (!outDir) throw new Error('No output directory available');
 
-  const tempRoot = (paths && paths.tempRoot) || path.join(process.cwd(), 'video-temp');
+  let tempRoot = (paths && paths.tempRoot) || path.join(process.cwd(), 'video-temp');
+  console.log('[scrollingWorker] Received paths:', JSON.stringify(paths, null, 2));
+  console.log('[scrollingWorker] Initial temp root:', tempRoot);
+  console.log('[scrollingWorker] process.cwd():', process.cwd());
+
+  // Fallback for unpacked builds where tempRoot might be invalid
+  if (!tempRoot || typeof tempRoot !== 'string' || tempRoot.includes('win-unpacked')) {
+    // Fall back to user data directory for unpacked builds
+    const os = require('os');
+    const path = require('path');
+    tempRoot = path.join(os.homedir(), 'AppData', 'Roaming', 'slideshow-generator', 'video-temp');
+    console.log('[scrollingWorker] Using fallback temp root for unpacked build:', tempRoot);
+  }
+
   await fs.mkdir(tempRoot, { recursive: true });
-  console.log('[scrollingWorker] Temp root:', tempRoot);
+  console.log('[scrollingWorker] Final temp root:', tempRoot);
 
   const tempDir = await fs.mkdtemp(path.join(tempRoot, 'scrolling-video-'));
   currentTempDirPath = tempDir;
   const timestamp = Date.now();
   const baseFileName = `scrolling-video-${timestamp}`;
-  console.log('[scrollingWorker] Temp dir:', tempDir);
+  console.log('[scrollingWorker] Temp dir created:', tempDir);
+
+  // Validate tempDir is not null/undefined
+  if (!tempDir || typeof tempDir !== 'string') {
+    throw new Error(`Invalid temp directory created: ${tempDir}. tempRoot was: ${tempRoot}`);
+  }
 
   // Slides
   const slideConfigs = slides && slides.length > 0 ? slides : [

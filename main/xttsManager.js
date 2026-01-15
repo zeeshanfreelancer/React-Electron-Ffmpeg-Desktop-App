@@ -22,13 +22,61 @@ function getXttsRootDir() {
     const resourcesPath = process.resourcesPath || path.join(process.execPath, '..', 'resources');
     const xttsPath = path.join(resourcesPath, 'xtts');
     console.log('[xttsManager] Packaged build - XTTS root:', xttsPath);
+    console.log('[xttsManager] app.isPackaged:', app.isPackaged);
     console.log('[xttsManager] process.resourcesPath:', process.resourcesPath);
     console.log('[xttsManager] process.execPath:', process.execPath);
-    return xttsPath;
+
+    // Check if we're running from an unpacked build (dist\win-unpacked)
+    // In this case, we need to use the original dev XTTS path from the project root
+    // because packaged XTTS executables might not work due to missing Python environment
+    const isUnpackedBuild = process.execPath.includes('win-unpacked') ||
+                           (process.execPath.includes('dist') && process.execPath.includes('unpacked'));
+
+    if (isUnpackedBuild) {
+      console.log('[xttsManager] Detected unpacked build, calculating original dev XTTS path');
+      // execPath is: .../dist/win-unpacked/Slideshow Generator.exe
+      // We need to go up 2 levels to get to project root: ../../xtts
+      const execDir = path.dirname(process.execPath); // .../dist/win-unpacked
+      
+      // Navigate up from win-unpacked to dist, then to project root
+      let projectRoot = execDir;
+      if (execDir.endsWith('win-unpacked')) {
+        projectRoot = path.join(execDir, '..'); // .../dist
+        projectRoot = path.join(projectRoot, '..'); // project root
+      } else if (execDir.includes('dist')) {
+        projectRoot = path.join(execDir, '..'); // project root
+      }
+      
+      const devPath = path.join(projectRoot, 'xtts');
+      console.log('[xttsManager] Calculated dev XTTS path from unpacked build:', devPath);
+      console.log('[xttsManager] Exec dir:', execDir);
+      console.log('[xttsManager] Project root:', projectRoot);
+      console.log('[xttsManager] Path exists:', require('fs').existsSync(devPath));
+      
+      // Verify the path exists, otherwise fall back to resources
+      if (require('fs').existsSync(devPath)) {
+        console.log('[xttsManager] Using original dev XTTS path for unpacked build');
+        return devPath;
+      } else {
+        console.warn('[xttsManager] Dev XTTS path does not exist:', devPath);
+        console.warn('[xttsManager] Falling back to resources path:', xttsPath);
+        // Fall through to try resources path
+      }
+    }
+
+    // Double-check if this is actually a packaged build by verifying the path exists
+    if (require('fs').existsSync(xttsPath)) {
+      console.log('[xttsManager] Packaged XTTS path exists, using it');
+      return xttsPath;
+    } else {
+      console.warn('[xttsManager] Packaged XTTS path does not exist, falling back to dev path');
+    }
   }
-  // Dev: repo root/xtts
+
+  // Dev: repo root/xtts (or fallback for packaged builds with missing XTTS)
   const devPath = path.join(__dirname, '..', 'xtts');
-  console.log('[xttsManager] Dev build - XTTS root:', devPath);
+  console.log('[xttsManager] Using dev XTTS root:', devPath);
+  console.log('[xttsManager] app.isPackaged:', app ? app.isPackaged : 'app not available');
   return devPath;
 }
 
@@ -216,6 +264,7 @@ function spawnXttsServer({ port }) {
 
   if (!fs.existsSync(exe)) {
     console.error('[xttsManager] XTTS exe not found at:', exe);
+    console.error('[xttsManager] Available files in directory:', fs.existsSync(path.dirname(exe)) ? fs.readdirSync(path.dirname(exe)) : 'directory does not exist');
     throw new Error(`XTTS server executable not found: ${exe}`);
   }
   console.log('[xttsManager] XTTS exe exists ✓');
@@ -253,23 +302,36 @@ function spawnXttsServer({ port }) {
     fs.mkdirSync(tempDir, { recursive: true });
     console.log('[xttsManager] Using temp dir for PyInstaller extraction:', tempDir);
     
-    // Clean up old extraction directories on startup (PyInstaller onefile creates _MEI* folders)
+    // Clean up old extraction directories on startup (PyInstaller onefile creates _MEI* folders, Python creates tmp* dirs)
     // These can accumulate if the server crashes or is killed abruptly
     try {
       const entries = fs.readdirSync(tempDir, { withFileTypes: true });
       for (const entry of entries) {
-        if (entry.isDirectory() && entry.name.startsWith('_MEI')) {
-          const oldDir = path.join(tempDir, entry.name);
-          try {
-            fs.rmSync(oldDir, { recursive: true, force: true });
-            console.log('[xttsManager] Cleaned up old PyInstaller extraction:', oldDir);
-          } catch (e) {
-            console.warn('[xttsManager] Failed to clean up old extraction dir:', oldDir, e.message);
+        if (entry.isDirectory()) {
+          const dirName = entry.name;
+          // Clean up both PyInstaller _MEI* dirs and other temp dirs
+          if (dirName.startsWith('_MEI') || dirName.startsWith('tmp') || dirName.length >= 8) {
+            const oldDir = path.join(tempDir, dirName);
+            try {
+              // Check if directory is old enough to clean up (older than 5 minutes)
+              const stats = fs.statSync(oldDir);
+              const ageMs = Date.now() - stats.mtimeMs;
+              const maxAgeMs = 5 * 60 * 1000; // 5 minutes
+
+              if (ageMs > maxAgeMs) {
+                fs.rmSync(oldDir, { recursive: true, force: true });
+                console.log('[xttsManager] Cleaned up old temp dir on startup:', oldDir, '(age:', Math.round(ageMs/1000), 'seconds)');
+              } else {
+                console.log('[xttsManager] Keeping recent temp dir on startup:', oldDir, '(age:', Math.round(ageMs/1000), 'seconds)');
+              }
+            } catch (e) {
+              console.warn('[xttsManager] Failed to clean up old temp dir on startup:', oldDir, e.message);
+            }
           }
         }
       }
     } catch (e) {
-      console.warn('[xttsManager] Failed to scan temp dir for cleanup:', e.message);
+      console.warn('[xttsManager] Failed to scan temp dir for cleanup on startup:', e.message);
     }
   } catch (_) {
     tempDir = undefined;
@@ -803,10 +865,11 @@ async function synthesizeWav({ text, language = 'en', voiceId = '', outPath, pro
 
 function stop() {
   if (xttsProc) {
+    console.log('[xttsManager] Stopping XTTS server process, PID:', xttsProc.pid);
     try {
       xttsProc.kill();
-    } catch (_) {
-      // ignore
+    } catch (e) {
+      console.warn('[xttsManager] Error killing XTTS process:', e.message);
     }
     xttsProc = null;
     xttsBaseUrl = null;
@@ -819,13 +882,26 @@ function stop() {
       if (fs.existsSync(tempDir)) {
         const entries = fs.readdirSync(tempDir, { withFileTypes: true });
         for (const entry of entries) {
-          if (entry.isDirectory() && entry.name.startsWith('_MEI')) {
-            const oldDir = path.join(tempDir, entry.name);
-            try {
-              fs.rmSync(oldDir, { recursive: true, force: true });
-              console.log('[xttsManager] Cleaned up PyInstaller extraction after stop:', oldDir);
-            } catch (e) {
-              console.warn('[xttsManager] Failed to clean up extraction dir:', oldDir, e.message);
+          if (entry.isDirectory()) {
+            const dirName = entry.name;
+            // Clean up both PyInstaller _MEI* dirs and other temp dirs (tmp* patterns)
+            if (dirName.startsWith('_MEI') || dirName.startsWith('tmp') || dirName.length >= 8) {
+              const oldDir = path.join(tempDir, dirName);
+              try {
+                // Check if directory is old enough to clean up (older than 5 minutes)
+                const stats = fs.statSync(oldDir);
+                const ageMs = Date.now() - stats.mtimeMs;
+                const maxAgeMs = 5 * 60 * 1000; // 5 minutes
+
+                if (ageMs > maxAgeMs) {
+                  fs.rmSync(oldDir, { recursive: true, force: true });
+                  console.log('[xttsManager] Cleaned up old temp dir after stop:', oldDir, '(age:', Math.round(ageMs/1000), 'seconds)');
+                } else {
+                  console.log('[xttsManager] Keeping recent temp dir:', oldDir, '(age:', Math.round(ageMs/1000), 'seconds)');
+                }
+              } catch (e) {
+                console.warn('[xttsManager] Failed to clean up temp dir:', oldDir, e.message);
+              }
             }
           }
         }
@@ -836,12 +912,41 @@ function stop() {
   }
 }
 
+// Manual cleanup function for testing/debugging
+function cleanupTempDirs() {
+  if (!app) return;
+  try {
+    const tempDir = path.join(app.getPath('userData'), 'xtts-tmp');
+    if (fs.existsSync(tempDir)) {
+      const entries = fs.readdirSync(tempDir, { withFileTypes: true });
+      let cleanedCount = 0;
+      for (const entry of entries) {
+        if (entry.isDirectory()) {
+          const dirName = entry.name;
+          if (dirName.startsWith('_MEI') || dirName.startsWith('tmp') || dirName.length >= 8) {
+            const oldDir = path.join(tempDir, dirName);
+            try {
+              fs.rmSync(oldDir, { recursive: true, force: true });
+              cleanedCount++;
+              console.log('[xttsManager] Manually cleaned up temp dir:', oldDir);
+            } catch (e) {
+              console.warn('[xttsManager] Failed to clean up temp dir:', oldDir, e.message);
+            }
+          }
+        }
+      }
+      console.log(`[xttsManager] Cleanup complete: removed ${cleanedCount} temp directories`);
+    }
+  } catch (e) {
+    console.warn('[xttsManager] Failed to cleanup temp dirs:', e.message);
+  }
+}
+
 module.exports = {
   getPaths,
   ensureRunning,
   listVoices,
   synthesizeWav,
   stop,
+  cleanupTempDirs,
 };
-
-

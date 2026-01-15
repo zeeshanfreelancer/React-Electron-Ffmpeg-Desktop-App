@@ -57,18 +57,32 @@ async function writeAppSettings(nextSettings) {
 }
 
 async function resolveVideoTempRoot() {
+  console.log('[resolveVideoTempRoot] Starting resolution...');
+  console.log('[resolveVideoTempRoot] app.isPackaged:', app.isPackaged);
+  console.log('[resolveVideoTempRoot] __dirname:', __dirname);
+
   // User override
   const settings = await readAppSettings();
+  console.log('[resolveVideoTempRoot] Settings loaded:', settings);
   const userDir = settings && typeof settings.tempDirectory === 'string' ? settings.tempDirectory.trim() : '';
+  console.log('[resolveVideoTempRoot] userDir from settings:', userDir);
+
   if (userDir) {
     const p = path.join(userDir, 'slideshow-generator-temp');
+    console.log('[resolveVideoTempRoot] Using user override path:', p);
     await fs.mkdir(p, { recursive: true });
     return p;
   }
+
   // Default: dev => project root/video-temp, packaged => userData/video-temp
   const baseRoot = app.isPackaged ? app.getPath('userData') : path.join(__dirname, '..');
+  console.log('[resolveVideoTempRoot] baseRoot determined:', baseRoot);
+
   const p = path.join(baseRoot, 'video-temp');
+  console.log('[resolveVideoTempRoot] Final temp path:', p);
+
   await fs.mkdir(p, { recursive: true });
+  console.log('[resolveVideoTempRoot] Directory created, returning:', p);
   return p;
 }
 
@@ -680,6 +694,9 @@ function registerIpcHandlers() {
 
       const tempRoot = await resolveVideoTempRoot();
       const defaultOutputDir = app.getPath('desktop');
+
+      console.log('[main] Temp root resolved:', tempRoot);
+      console.log('[main] Default output dir:', defaultOutputDir);
 
       safeWorkerSend({
         type: 'start',
